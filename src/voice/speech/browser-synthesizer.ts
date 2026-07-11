@@ -123,6 +123,28 @@ const safeHardLimit = (text: string, start: number, end: number): number => {
   return limit;
 };
 
+const protectTrailingPunctuation = (
+  text: string,
+  start: number,
+  end: number,
+  limit: number,
+): number => {
+  let runStart = end;
+  let hasSentenceEnding = false;
+  while (runStart > start) {
+    const character = text[runStart - 1];
+    if (!SENTENCE_ENDINGS.has(character) && !SENTENCE_CLOSERS.has(character)) {
+      break;
+    }
+    if (SENTENCE_ENDINGS.has(character)) hasSentenceEnding = true;
+    runStart -= 1;
+  }
+
+  return hasSentenceEnding && runStart > start && limit > runStart
+    ? runStart
+    : limit;
+};
+
 const preferredBreak = (text: string, start: number, limit: number): number => {
   for (let index = limit - 1; index >= start; index -= 1) {
     if (/\s/u.test(text[index])) return index + 1;
@@ -140,7 +162,13 @@ const appendBoundedChunks = (
 
   let start = segmentStart;
   while (segmentEnd - start > MAX_SPEECH_CHUNK_LENGTH) {
-    const limit = safeHardLimit(range.text, start, segmentEnd);
+    const hardLimit = safeHardLimit(range.text, start, segmentEnd);
+    const limit = protectTrailingPunctuation(
+      range.text,
+      start,
+      segmentEnd,
+      hardLimit,
+    );
     const end = preferredBreak(range.text, start, limit);
     chunks.push(createChunk(range, start, end));
     start = end;

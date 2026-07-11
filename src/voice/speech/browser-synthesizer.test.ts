@@ -299,6 +299,25 @@ describe("splitRangeIntoSpeechChunks", () => {
     ]);
   });
 
+  it.each(["？！", "。”"])(
+    "moves the complete trailing punctuation group %s past a 240-unit boundary",
+    (ending) => {
+      const prefix = "a".repeat(239);
+      const range = makeRange(`${prefix}${ending}`, 40);
+      const chunks = splitRangeIntoSpeechChunks(range);
+
+      expect(chunks.map((chunk) => chunk.text)).toEqual([prefix, ending]);
+      expect(chunks.every((chunk) => chunk.text.length <= 240)).toBe(true);
+      expect(chunks.map((chunk) => chunk.text).join("")).toBe(range.text);
+      expect(chunks.map((chunk) => [chunk.range.from, chunk.range.to])).toEqual(
+        [
+          [40, 279],
+          [279, 281],
+        ],
+      );
+    },
+  );
+
   it("bounds oversized text, prefers whitespace, and never splits a surrogate pair", () => {
     const text = `${"a".repeat(239)}😀${"b".repeat(4759)}`;
     expect(text.length).toBe(5000);
