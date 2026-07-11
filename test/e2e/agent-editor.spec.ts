@@ -122,11 +122,14 @@ test("reviews suggestions by keyboard without taking over editor typing keys", a
 });
 
 test("drops a delayed Ask AI response after the document revision changes", async ({ page }) => {
-  let requested = false;
+  let releaseModel: (() => void) | undefined;
+  let requestStarted: (() => void) | undefined;
+  const responseReleased = new Promise<void>((resolve) => { releaseModel = resolve; });
+  const requestObserved = new Promise<void>((resolve) => { requestStarted = resolve; });
   await page.route(wordflowApi, async (route) => {
     const context = agentContextFor(route);
-    requested = true;
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    requestStarted?.();
+    await responseReleased;
     await fulfill(route, JSON.stringify([{
       id: "e2e-stale-agent",
       type: "replaceRange",
@@ -140,14 +143,46 @@ test("drops a delayed Ask AI response after the document revision changes", asyn
   await freshPage(page);
 
   const editor = page.locator(".ProseMirror");
+  const before = await page.evaluate(() => {
+    const wordflow = document.querySelector("wordflow-wordflow") as unknown as {
+      voiceBridge?: { getRevision(): number; getSnapshot(): { paragraphs: Array<{ text: string }> } };
+    };
+    const bridge = wordflow.voiceBridge;
+    if (!bridge) throw new Error("Expected the editor bridge to be ready");
+    return {
+      revision: bridge.getRevision(),
+      text: bridge.getSnapshot().paragraphs.map((paragraph) => paragraph.text).join("\n"),
+    };
+  });
   await editor.click();
   await page.getByRole("button", { name: "Ask AI" }).click();
-  await expect.poll(() => requested).toBe(true);
+  await requestObserved;
   await editor.press("End");
   await editor.press(" ");
+  await expect.poll(async () => page.evaluate(() => {
+    const wordflow = document.querySelector("wordflow-wordflow") as unknown as {
+      voiceBridge?: { getRevision(): number; getSnapshot(): { paragraphs: Array<{ text: string }> } };
+    };
+    const bridge = wordflow.voiceBridge;
+    return bridge
+      ? {
+          revision: bridge.getRevision(),
+          text: bridge.getSnapshot().paragraphs.map((paragraph) => paragraph.text).join("\n"),
+        }
+      : null;
+  })).toEqual(expect.objectContaining({ revision: before.revision + 1 }));
+  await expect.poll(async () => page.evaluate(() => {
+    const wordflow = document.querySelector("wordflow-wordflow") as unknown as {
+      voiceBridge?: { getSnapshot(): { paragraphs: Array<{ text: string }> } };
+    };
+    return wordflow.voiceBridge?.getSnapshot().paragraphs
+      .map((paragraph) => paragraph.text)
+      .join("\n") ?? null;
+  })).not.toBe(before.text);
+  releaseModel?.();
 
   await expect(page.getByText("Suggestion 1 of 1")).toHaveCount(0);
-  await page.waitForTimeout(350);
+  await page.waitForTimeout(100);
   await expect(page.getByText("Suggestion 1 of 1")).toHaveCount(0);
   await expect(editor).not.toContainText("This stale response must never be shown.");
 });
