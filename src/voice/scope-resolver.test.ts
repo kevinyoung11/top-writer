@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+
+import { Editor } from "@tiptap/core";
+import StarterKit from "@tiptap/starter-kit";
+import { afterEach, describe, expect, it } from "vitest";
+import { EditorBridge } from "./editor/editor-bridge";
+import { VoiceHighlightExtension } from "./editor/voice-highlight-extension";
 import type {
   EditorSnapshot,
   ParagraphRef,
@@ -17,6 +23,7 @@ const paragraphs: ParagraphRef[] = [
     from: 1,
     to: 4,
     text: "甲段。",
+    separatorBefore: "",
   },
   {
     id: "nested-p1",
@@ -27,6 +34,7 @@ const paragraphs: ParagraphRef[] = [
     from: 12,
     to: 15,
     text: "中\n段",
+    separatorBefore: "\n\n",
   },
   {
     id: "p2",
@@ -37,8 +45,21 @@ const paragraphs: ParagraphRef[] = [
     from: 21,
     to: 24,
     text: "末段！",
+    separatorBefore: "\n\n",
   },
 ];
+
+const jsdomEditors: Editor[] = [];
+const jsdomBridges: EditorBridge[] = [];
+
+afterEach(() => {
+  while (jsdomBridges.length > 0) jsdomBridges.pop()?.destroy();
+  while (jsdomEditors.length > 0) {
+    const editor = jsdomEditors.pop();
+    if (editor && !editor.isDestroyed) editor.destroy();
+  }
+  document.body.replaceChildren();
+});
 
 const snapshot = (patch: Partial<EditorSnapshot> = {}): EditorSnapshot => ({
   revision: 9,
@@ -101,6 +122,73 @@ describe("resolveScope", () => {
       paragraphIndexes: [1],
       block: true,
     });
+  });
+
+  it("uses bridge-provided structural separators for document text", () => {
+    const value = snapshot({
+      paragraphs: [
+        { ...paragraphs[0], text: "Alpha", separatorBefore: "" },
+        {
+          ...paragraphs[1],
+          text: "Beta",
+          separatorBefore: "\n[horizontal rule]\n",
+        },
+        { ...paragraphs[2], text: "Gamma", separatorBefore: "\u2028" },
+      ],
+    });
+
+    expect(resolve({ kind: "document" }, value)).toMatchObject({
+      text: "Alpha\n[horizontal rule]\nBeta\u2028Gamma",
+      paragraphIndexes: [0, 1, 2],
+    });
+  });
+
+  it("rejects multi-paragraph document scopes with absent or invalid separators", () => {
+    const missingSeparator = snapshot({
+      paragraphs: [
+        { ...paragraphs[0], separatorBefore: "" },
+        { ...paragraphs[1], separatorBefore: undefined },
+      ],
+    });
+    const invalidSeparator = snapshot({
+      paragraphs: [
+        { ...paragraphs[0], separatorBefore: "" },
+        {
+          ...paragraphs[1],
+          separatorBefore: 42 as unknown as string,
+        },
+      ],
+    });
+
+    expect(resolve({ kind: "document" }, missingSeparator)).toBeNull();
+    expect(resolve({ kind: "document" }, invalidSeparator)).toBeNull();
+  });
+
+  it("matches the EditorBridge canonical document text around a horizontal rule", () => {
+    const editor = new Editor({
+      element: document.createElement("div"),
+      extensions: [StarterKit, VoiceHighlightExtension],
+      content: "<p>Alpha</p><hr><p>Beta</p>",
+    });
+    document.body.append(editor.view.dom);
+    jsdomEditors.push(editor);
+    const bridge = new EditorBridge(editor);
+    jsdomBridges.push(bridge);
+
+    const bridgeSnapshot = bridge.getSnapshot();
+    const first = bridgeSnapshot.paragraphs[0];
+    const last =
+      bridgeSnapshot.paragraphs[bridgeSnapshot.paragraphs.length - 1];
+    const expectedText = editor.state.doc.textBetween(
+      first.from,
+      last.to,
+      "\n\n",
+      "\n",
+    );
+    const resolved = resolve({ kind: "document" }, bridgeSnapshot);
+
+    expect(resolved?.text).toBe(expectedText);
+    expect(resolved?.paragraphIndexes).toEqual([0, 1]);
   });
 
   it("uses selection then valid last-spoken then cursor for effective scope", () => {

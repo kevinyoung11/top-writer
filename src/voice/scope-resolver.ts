@@ -84,6 +84,20 @@ const resolvedAnchor = (
   return rangeForParagraph(snapshot.paragraphs[target], snapshot.revision);
 };
 
+const canonicalDocumentText = (
+  paragraphs: readonly ParagraphRef[],
+): string | null => {
+  const first = paragraphs[0];
+  if (!first) return null;
+
+  let text = first.text;
+  for (const paragraph of paragraphs.slice(1)) {
+    if (typeof paragraph.separatorBefore !== "string") return null;
+    text += paragraph.separatorBefore + paragraph.text;
+  }
+  return text;
+};
+
 export const resolveScope = (
   scope: VoiceScope,
   snapshot: EditorSnapshot,
@@ -94,13 +108,13 @@ export const resolveScope = (
       const first = snapshot.paragraphs[0];
       const last = snapshot.paragraphs[snapshot.paragraphs.length - 1];
       if (!first || !last) return null;
+      const text = canonicalDocumentText(snapshot.paragraphs);
+      if (text === null) return null;
       return {
         revision: snapshot.revision,
         from: first.nodeFrom,
         to: last.nodeTo,
-        text: snapshot.paragraphs
-          .map((paragraph) => paragraph.text)
-          .join("\n\n"),
+        text,
         paragraphIndexes: snapshot.paragraphs.map(
           (paragraph) => paragraph.index,
         ),
