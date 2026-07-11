@@ -128,6 +128,7 @@ export class VoicePreferencesStore extends EventTarget {
   private readonly injectedStorage: VoicePreferencesStorage | null | undefined;
   private resolvedStorage: VoicePreferencesStorage | null | undefined;
   private preferences: VoicePreferences | null = null;
+  private persistedRecordPresent = false;
 
   constructor(storage?: VoicePreferencesStorage | null) {
     super();
@@ -205,6 +206,8 @@ export class VoicePreferencesStore extends EventTarget {
       persisted = null;
     }
 
+    if (persisted !== null) this.persistedRecordPresent = true;
+
     if (persisted === null) {
       this.preferences = createDefaults();
       return this.preferences;
@@ -220,20 +223,39 @@ export class VoicePreferencesStore extends EventTarget {
 
   private commit(next: VoicePreferences, persistence: "set" | "remove"): void {
     const current = this.ensureLoaded();
-    if (preferencesEqual(current, next)) return;
+    const valueChanged = !preferencesEqual(current, next);
 
-    this.preferences = clonePreferences(next);
-    try {
-      if (persistence === "remove") this.storage()?.removeItem(STORAGE_KEY);
-      else
-        this.storage()?.setItem(STORAGE_KEY, JSON.stringify(this.preferences));
-    } catch {
-      // Storage failures must not block in-memory preferences.
+    if (valueChanged) this.preferences = clonePreferences(next);
+
+    if (persistence === "remove") {
+      if (this.persistedRecordPresent) {
+        try {
+          const storage = this.storage();
+          if (storage) {
+            storage.removeItem(STORAGE_KEY);
+            this.persistedRecordPresent = false;
+          }
+        } catch {
+          // Keep the flag set so a later clear can retry.
+        }
+      }
+    } else if (valueChanged) {
+      try {
+        const storage = this.storage();
+        if (storage) {
+          storage.setItem(STORAGE_KEY, JSON.stringify(this.preferences));
+          this.persistedRecordPresent = true;
+        }
+      } catch {
+        // Storage failures must not block in-memory preferences.
+      }
     }
+
+    if (!valueChanged) return;
 
     this.dispatchEvent(
       new CustomEvent<VoicePreferences>("change", {
-        detail: clonePreferences(this.preferences),
+        detail: clonePreferences(next),
       }),
     );
   }

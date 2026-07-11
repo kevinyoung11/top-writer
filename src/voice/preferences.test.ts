@@ -169,6 +169,68 @@ describe("VoicePreferencesStore", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("removes a serialized default record without emitting a change", () => {
+    const storage = new MemoryStorage();
+    storage.values.set(STORAGE_KEY, JSON.stringify(DEFAULT_VOICE_PREFERENCES));
+    const store = new VoicePreferencesStore(storage);
+    const listener = vi.fn();
+    store.addEventListener("change", listener);
+
+    expect(store.value).toEqual(DEFAULT_VOICE_PREFERENCES);
+    store.clear();
+
+    expect(storage.removeItem).toHaveBeenCalledOnce();
+    expect(storage.removeItem).toHaveBeenCalledWith(STORAGE_KEY);
+    expect(storage.values.has(STORAGE_KEY)).toBe(false);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("removes a corrupt persisted record after falling back to defaults", () => {
+    const storage = new MemoryStorage();
+    storage.values.set(STORAGE_KEY, "{bad json");
+    const store = new VoicePreferencesStore(storage);
+    const listener = vi.fn();
+    store.addEventListener("change", listener);
+
+    expect(store.value).toEqual(DEFAULT_VOICE_PREFERENCES);
+    store.clear();
+
+    expect(storage.removeItem).toHaveBeenCalledOnce();
+    expect(storage.values.has(STORAGE_KEY)).toBe(false);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("does not remove or emit when clearing defaults from empty storage", () => {
+    const storage = new MemoryStorage();
+    const store = new VoicePreferencesStore(storage);
+    const listener = vi.fn();
+    store.addEventListener("change", listener);
+
+    expect(store.value).toEqual(DEFAULT_VOICE_PREFERENCES);
+    store.clear();
+
+    expect(storage.removeItem).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("retries removing a persisted record after a storage failure", () => {
+    const storage = new MemoryStorage();
+    storage.values.set(STORAGE_KEY, JSON.stringify(DEFAULT_VOICE_PREFERENCES));
+    storage.removeItem.mockImplementationOnce(() => {
+      throw new Error("blocked");
+    });
+    const store = new VoicePreferencesStore(storage);
+
+    expect(store.value).toEqual(DEFAULT_VOICE_PREFERENCES);
+    expect(() => store.clear()).not.toThrow();
+    expect(storage.values.has(STORAGE_KEY)).toBe(true);
+
+    store.clear();
+
+    expect(storage.removeItem).toHaveBeenCalledTimes(2);
+    expect(storage.values.has(STORAGE_KEY)).toBe(false);
+  });
+
   it("deduplicates, updates, and removes vocabulary by normalized spoken form", () => {
     const storage = new MemoryStorage();
     const store = new VoicePreferencesStore(storage);
