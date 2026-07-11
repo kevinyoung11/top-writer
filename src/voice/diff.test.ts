@@ -167,6 +167,26 @@ describe("buildDiffSegments", () => {
     ]);
   });
 
+  it("does not split surrogate pairs after semantic cleanup on the token path", () => {
+    class EmojiTokenSegmenter {
+      segment(input: string): Segment[] {
+        return Array.from(input, (segment) => ({ segment }));
+      }
+    }
+
+    stubSegmenter(EmojiTokenSegmenter);
+
+    const original = "👨";
+    const replacement = "👩👨👩";
+    const segments = buildDiffSegments(original, replacement);
+
+    expect(reconstructOriginal(segments)).toBe(original);
+    expect(reconstructReplacement(segments)).toBe(replacement);
+    expect(
+      segments.every((segment) => !hasIsolatedSurrogate(segment.text)),
+    ).toBe(true);
+  });
+
   it("falls back to character diff when Intl.Segmenter is unavailable", () => {
     stubSegmenter(undefined);
 

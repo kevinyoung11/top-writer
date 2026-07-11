@@ -210,10 +210,11 @@ const runTokenDiff = (
       encoded.replacement,
       false,
     );
+    engine.diff_cleanupSemantic(encodedDiffs);
+
     const decodedDiffs = decodeDiffs(encodedDiffs, encoded.tokenByCode);
     if (!decodedDiffs) return null;
 
-    engine.diff_cleanupSemantic(decodedDiffs);
     return decodedDiffs;
   } catch {
     return null;
@@ -325,7 +326,8 @@ export const buildDiffSegments = (
   if (!tokenDiffs) return buildCharacterDiff(original, replacement);
 
   const segments = mergeSegments(tokenDiffs);
-  return isExactDiff(segments, original, replacement)
+  return isExactDiff(segments, original, replacement) &&
+    segments.every((segment) => hasCompleteSurrogatePairs(segment.text))
     ? segments
     : buildCharacterDiff(original, replacement);
 };
