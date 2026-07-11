@@ -510,6 +510,23 @@ describe("VoiceCopilotController", () => {
     await previous;
   });
 
+  it("returns to an existing preview after player navigation instead of hiding its staged confirmation", async () => {
+    const { controller, synthesizer } = createController();
+    await controller.submitTranscript("改写当前段");
+    const preview = controller.state.preview;
+    if (!preview) throw new Error("Expected preview");
+
+    const reading = controller.read({ kind: "next" });
+    await Promise.resolve();
+    synthesizer.finish();
+    await reading;
+
+    expect(controller.state).toMatchObject({
+      phase: "preview",
+      preview: { id: preview.id },
+    });
+  });
+
   it("reads a whole document as paragraph content ranges rather than block node ranges", async () => {
     const { controller, synthesizer } = createController();
     const reading = controller.read({ kind: "document" });
@@ -656,6 +673,26 @@ describe("VoiceCopilotController", () => {
       errorCode: "stale-candidate",
     });
     expect(synthesizer.calls).toEqual([]);
+  });
+
+  it("requires clarification for multiple semantic candidates even when one score is much higher", async () => {
+    const { controller, synthesizer, rewrite } = createController({
+      locate: async (_query, value) => [
+        { range: paragraphRange(value, 0), score: 0.99, reason: "高分" },
+        { range: paragraphRange(value, 1), score: 0.01, reason: "仍需确认" },
+      ],
+    });
+
+    await controller.submitTranscript(
+      "找到讲用户信任的那段，读一下，再改得更直接",
+    );
+
+    expect(controller.state).toMatchObject({
+      phase: "clarifying",
+      candidates: [{ score: 0.99 }, { score: 0.01 }],
+    });
+    expect(synthesizer.calls).toHaveLength(0);
+    expect(rewrite).not.toHaveBeenCalled();
   });
 
   it("continues a paused compound plan after a fresh candidate selection", async () => {

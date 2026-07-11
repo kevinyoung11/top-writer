@@ -292,7 +292,11 @@ export class VoiceCopilotController extends EventTarget {
     this.stopSpeech(false);
     this.pendingActions = [];
     this.resolvedTarget = null;
-    await this.readScope(scope, token, "idle");
+    await this.readScope(
+      scope,
+      token,
+      this.stateValue.preview ? "preview" : "idle",
+    );
   }
 
   async chooseCandidate(index: number): Promise<void> {
@@ -911,15 +915,16 @@ export class VoiceCopilotController extends EventTarget {
   }
 
   private isUnambiguous(candidates: readonly LocateCandidate[]): boolean {
-    if (candidates.length === 1) return true;
-    const [first, second] = candidates;
-    return first.score >= 0.9 && first.score - second.score >= 0.2;
+    // Locator returns exactly one candidate for a unique local/exact result.
+    // A score gap is not permission to guess when more than one paragraph was
+    // returned: rewriting or reading the wrong paragraph is worse than asking.
+    return candidates.length === 1;
   }
 
   private async readScope(
     scope: VoiceScope,
     token: number,
-    finalPhase: "idle" | "understanding",
+    finalPhase: "idle" | "understanding" | "preview",
   ): Promise<void> {
     const snapshot = this.snapshot();
     const range = resolveScope(scope, snapshot, this.resolvedTarget);
