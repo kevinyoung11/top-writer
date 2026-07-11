@@ -19,6 +19,20 @@ import {
   voiceEditorStatePluginKey,
   type VoiceHighlightChannel,
 } from "./voice-highlight-extension";
+import {
+  acceptAgentSuggestion as acceptSuggestion,
+  acceptAllAgentSuggestions as acceptAllSuggestions,
+  addAgentSuggestions as addSuggestions,
+  currentAgentSuggestion as currentSuggestion,
+  listAgentSuggestions as listSuggestions,
+  nextAgentSuggestion as nextSuggestion,
+  previousAgentSuggestion as previousSuggestion,
+  rejectAgentSuggestion as rejectSuggestion,
+  rejectAllAgentSuggestions as rejectAllSuggestions,
+  type AgentSuggestion,
+  type AgentSuggestionResult,
+} from "../../agent/agent-suggestion-extension";
+import type { AgentEditOperation } from "../../agent/types";
 
 export { VOICE_EDIT_META } from "./voice-highlight-extension";
 
@@ -287,6 +301,51 @@ export class EditorBridge {
       );
     }
     return state.revision;
+  }
+
+  addAgentSuggestions(
+    operations: readonly AgentEditOperation[],
+  ): Promise<AgentSuggestionResult<string[]>> {
+    if (this.destroyed) {
+      return Promise.resolve({ ok: false, reason: "agent-suggestions-unavailable" });
+    }
+    return addSuggestions(this.editor, operations);
+  }
+
+  listAgentSuggestions(): AgentSuggestion[] {
+    return this.destroyed ? [] : listSuggestions(this.editor);
+  }
+
+  currentAgentSuggestion(): AgentSuggestion | null {
+    return this.destroyed ? null : currentSuggestion(this.editor);
+  }
+
+  nextAgentSuggestion(): AgentSuggestion | null {
+    return this.destroyed ? null : nextSuggestion(this.editor);
+  }
+
+  previousAgentSuggestion(): AgentSuggestion | null {
+    return this.destroyed ? null : previousSuggestion(this.editor);
+  }
+
+  rejectAgentSuggestion(id?: string): AgentSuggestionResult<string> {
+    if (this.destroyed) return { ok: false, reason: "agent-suggestions-unavailable" };
+    return rejectSuggestion(this.editor, id);
+  }
+
+  acceptAgentSuggestion(id?: string): AgentSuggestionResult<string> {
+    if (this.destroyed) return { ok: false, reason: "agent-suggestions-unavailable" };
+    return acceptSuggestion(this.editor, id);
+  }
+
+  rejectAllAgentSuggestions(): AgentSuggestionResult<string[]> {
+    if (this.destroyed) return { ok: false, reason: "agent-suggestions-unavailable" };
+    return rejectAllSuggestions(this.editor);
+  }
+
+  acceptAllAgentSuggestions(): AgentSuggestionResult<string[]> {
+    if (this.destroyed) return { ok: false, reason: "agent-suggestions-unavailable" };
+    return acceptAllSuggestions(this.editor);
   }
 
   getSnapshot(lastSpokenParagraphIndex: number | null = null): EditorSnapshot {

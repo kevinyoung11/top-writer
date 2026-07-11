@@ -36,6 +36,7 @@ import type { PromptModel, SimpleEventMessage } from '../../types/common-types';
 import type { PromptDataLocal } from '../../types/wordflow';
 import { EditorBridge } from '../../voice/editor/editor-bridge';
 import { VoiceHighlightExtension } from '../../voice/editor/voice-highlight-extension';
+import { AgentSuggestionExtension } from '../../agent/agent-suggestion-extension';
 import type { PromptManager } from '../wordflow/prompt-manager';
 import type {
   ToastMessage,
@@ -279,7 +280,8 @@ export class WordflowTextEditor extends LitElement {
         mySidebarMenu,
         myEventHandler,
         myPlaceholder,
-        VoiceHighlightExtension
+        VoiceHighlightExtension,
+        AgentSuggestionExtension
       ],
       content: defaultText,
       autofocus: true

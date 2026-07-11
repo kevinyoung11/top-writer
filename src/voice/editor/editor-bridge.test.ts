@@ -12,6 +12,9 @@ import { LoadingHighlight } from "../../components/text-editor/loading-highlight
 import type { ParagraphRef, RewritePreview, VoiceRange } from "../types";
 import { EditorBridge, type BridgeResult } from "./editor-bridge";
 import { VoiceHighlightExtension } from "./voice-highlight-extension";
+import { AgentSuggestionExtension } from "../../agent/agent-suggestion-extension";
+import { hashOriginalText } from "../../agent/edit-protocol";
+import type { AgentEditOperation } from "../../agent/types";
 
 const DEFAULT_CONTENT =
   "<p>第一段内容。</p><p>第二段谈用户信任。</p><p>第三段内容。</p>";
@@ -211,6 +214,41 @@ describe("EditorBridge", () => {
       bridge.getSnapshot().paragraphs.map((paragraph) => paragraph.text),
     ).toEqual(["第一段内容。", "第二段谈用户信任。", "第三段内容。"]);
 
+    bridge.destroy();
+  });
+
+  it("exposes reviewable agent suggestions through the bridge", async () => {
+    const editor = new Editor({
+      element: document.createElement("div"),
+      extensions: [StarterKit, VoiceHighlightExtension, AgentSuggestionExtension],
+      content: "<p>Alpha</p>",
+    });
+    document.body.append(editor.view.dom);
+    editors.push(editor);
+    const bridge = new EditorBridge(editor);
+    const paragraph = bridge.getSnapshot().paragraphs[0];
+    const hash = await hashOriginalText(paragraph.text);
+    if (!hash.ok) throw new Error(`Could not hash operation: ${hash.error.code}`);
+    const operation: AgentEditOperation = {
+      id: "agent-one",
+      type: "replaceRange",
+      revision: bridge.getRevision(),
+      from: paragraph.from,
+      to: paragraph.to,
+      originalTextHash: hash.hash,
+      replacement: "One",
+    };
+
+    expect(await bridge.addAgentSuggestions([operation])).toEqual({
+      ok: true,
+      value: ["agent-one"],
+    });
+    expect(bridge.currentAgentSuggestion()?.id).toBe("agent-one");
+    expect(bridge.acceptAgentSuggestion()).toEqual({
+      ok: true,
+      value: "agent-one",
+    });
+    expect(editor.getText()).toBe("One");
     bridge.destroy();
   });
 
