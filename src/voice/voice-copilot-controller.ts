@@ -1112,10 +1112,26 @@ export class VoiceCopilotController extends EventTarget {
       this.ignoredSelfRevision = null;
       return;
     }
-    if (revision === this.stateValue.preview?.revision) return;
-    if (this.stateValue.preview) {
+    const preview = this.stateValue.preview;
+    if (revision === preview?.revision) return;
+    if (preview) {
+      const rebaseSharedVoicePreview = (
+        this.dependencies.editor as EditorBridge & {
+          rebaseSharedVoiceRewritePreview?: (
+            previewId: string,
+          ) => RewritePreview | null;
+        }
+      ).rebaseSharedVoiceRewritePreview;
+      const rebased = rebaseSharedVoicePreview?.call(
+        this.dependencies.editor,
+        preview.id,
+      );
+      if (rebased) {
+        this.transition({ preview: rebased });
+        return;
+      }
       this.failPreview(
-        this.stateValue.preview,
+        preview,
         "stale-preview",
         "正文已变化，改写预览已过期。",
       );

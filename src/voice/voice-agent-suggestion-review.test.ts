@@ -4,6 +4,7 @@ import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentSuggestionExtension } from "../agent/agent-suggestion-extension";
+import { hashOriginalText } from "../agent/edit-protocol";
 import {
   ModelFamily,
   SupportedRemoteModel,
@@ -71,6 +72,51 @@ afterEach(() => {
 });
 
 describe("voice rewrite shared suggestion review", () => {
+  it("preserves a staged voice rewrite when an unrelated agent suggestion is accepted", async () => {
+    const { editor, bridge, controller } = createController();
+    editor.commands.setContent("<p>原文</p><p>旁白</p>");
+    editor.commands.setTextSelection(1);
+
+    await controller.submitTranscript("改写当前段");
+    const voicePreview = controller.state.preview;
+    if (!voicePreview) throw new Error("Expected voice rewrite preview");
+
+    const otherParagraph = bridge.getSnapshot().paragraphs[1];
+    if (!otherParagraph) throw new Error("Expected unrelated paragraph");
+    const hash = await hashOriginalText(otherParagraph.text);
+    if (!hash.ok) throw new Error("Expected a text hash");
+    await expect(
+      bridge.addAgentSuggestions([
+        {
+          id: "unrelated-agent-edit",
+          type: "replaceRange",
+          revision: bridge.getRevision(),
+          from: otherParagraph.from,
+          to: otherParagraph.to,
+          originalTextHash: hash.hash,
+          replacement: "旁白已修改",
+          reason: "test-unrelated-edit",
+        },
+      ]),
+    ).resolves.toEqual({ ok: true, value: ["unrelated-agent-edit"] });
+
+    expect(bridge.acceptAgentSuggestion("unrelated-agent-edit")).toEqual({
+      ok: true,
+      value: "unrelated-agent-edit",
+    });
+
+    expect(controller.state).toMatchObject({
+      phase: "preview",
+      preview: { id: voicePreview.id, revision: bridge.getRevision() },
+    });
+    expect(bridge.listAgentSuggestions().map((suggestion) => suggestion.id)).toEqual([
+      voicePreview.id,
+    ]);
+
+    controller.confirmPreview();
+    expect(editor.getText()).toBe("改写稿\n\n旁白已修改");
+  });
+
   it("routes a shared-review acceptance through the voice lifecycle and preserves undo", async () => {
     const { editor, bridge, controller } = createController();
 

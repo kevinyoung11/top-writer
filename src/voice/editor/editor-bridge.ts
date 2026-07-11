@@ -496,6 +496,55 @@ export class EditorBridge {
     return success(undefined);
   }
 
+  /**
+   * Rebase a shared voice suggestion only when the Agent Editor has safely
+   * remapped it as part of accepting another suggestion. Ordinary document
+   * edits leave the suggestion's revision unchanged and must still stale the
+   * voice preview.
+   */
+  rebaseSharedVoiceRewritePreview(previewId: string): RewritePreview | null {
+    if (this.destroyed || !this.sharedVoicePreviewIds.has(previewId)) {
+      return null;
+    }
+
+    const staged = this.stagedPreviews.get(previewId);
+    const suggestion = this.listAgentSuggestions().find(
+      (item) => item.id === previewId,
+    );
+    if (!staged || !suggestion) return null;
+
+    const operation = suggestion.operation;
+    const revision = this.getRevision();
+    if (
+      operation.type !== "replaceRange" ||
+      operation.revision !== revision ||
+      operation.replacement !== staged.snapshot.replacementText
+    ) {
+      return null;
+    }
+
+    const preview: RewritePreview = {
+      ...staged.snapshot,
+      revision,
+      range: {
+        ...staged.snapshot.range,
+        revision,
+        from: operation.from,
+        to: operation.to,
+        text: textForRange(this.editor.state.doc, operation.from, operation.to),
+      },
+    };
+    if (
+      preview.range.text !== preview.originalText ||
+      !this.previewMatchesDocument(preview)
+    ) {
+      return null;
+    }
+
+    staged.snapshot = clonePreview(preview);
+    return clonePreview(preview);
+  }
+
   onRevisionChange(listener: (revision: number) => void): () => void {
     if (this.destroyed) return () => {};
 
