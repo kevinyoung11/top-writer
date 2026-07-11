@@ -157,6 +157,29 @@ describe("parseVoicePlan", () => {
     },
   );
 
+  it.each(["改一下这段", "请改一下这段", "改这段", "改一下"])(
+    "parses an explicit bare rewrite command: %s",
+    (transcript) => {
+      expect(parseVoicePlan(transcript).actions).toEqual([
+        {
+          intent: "rewrite",
+          scope: { kind: "effective" },
+          constraints: [transcript],
+        },
+      ]);
+    },
+  );
+
+  it.each(["调整型基金风险很高", "压缩空气储能很重要", "精简版已经发布"])(
+    "does not treat a rewrite-verb noun prefix as a command: %s",
+    (transcript) => {
+      expect(parseVoicePlan(transcript)).toMatchObject({
+        confidence: 0,
+        actions: [],
+      });
+    },
+  );
+
   it("allows a rewrite request to quote a locate keyword", () => {
     expect(parseVoicePlan("把“找到”改成“发现”").actions).toEqual([
       {
@@ -194,10 +217,38 @@ describe("parseVoicePlan", () => {
     });
   });
 
+  it.each(["。", "！", "!"])(
+    "treats internal terminal punctuation %s as a locate-read separator",
+    (separator) => {
+      const transcript = `找到讲用户信任的那段${separator}读一下`;
+      const plan = parseVoicePlan(transcript);
+
+      expect(plan.transcript).toBe(transcript);
+      expect(plan.actions.map((action) => action.intent)).toEqual([
+        "locate",
+        "read",
+      ]);
+    },
+  );
+
   it("strips punctuation around a meaningful semantic query", () => {
     expect(parseVoicePlan("找到讲“用户信任”的那段").actions[0]).toMatchObject({
       intent: "locate",
       scope: { kind: "semantic", query: "用户信任" },
+    });
+  });
+
+  it("rejects a contentless semantic query", () => {
+    expect(parseVoicePlan("找到讲的那段")).toMatchObject({
+      confidence: 0,
+      actions: [],
+    });
+  });
+
+  it("preserves a meaningful single-character semantic query", () => {
+    expect(parseVoicePlan("找到讲税的那段").actions[0]).toMatchObject({
+      intent: "locate",
+      scope: { kind: "semantic", query: "税" },
     });
   });
 

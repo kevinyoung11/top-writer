@@ -1,15 +1,19 @@
 import type { VoiceAction, VoicePlan, VoiceScope } from "./types";
 
 const locatePattern =
-  /^(?:请\s*)?(?:找到|找出|定位)(?:一下)?(?:讲|关于)?(.+?)(?:的)?(?:那一段|段落|那段|地方|部分)(?=$|[，,；;\s]|然后|再)/;
+  /^(?:请\s*)?(?:找到|找出|定位)(?:一下)?(?:讲|关于)?(.+?)(?:的)?(?:那一段|段落|那段|地方|部分)(?=$|[，,；;。！？!?\s]|然后|再)/;
 
 const locateVerbPattern = /^(?:请\s*)?(?:找到|找出|定位)/;
 const rewritePattern = /改|润色|调整|压缩|精简/;
-const directRewritePattern =
-  /^(?:请\s*)?(?:(?:改写|改得|改成|润色|调整|压缩|精简)|(?:把|将).+(?:改写|改得|改成|改|润色|调整|压缩|精简))/;
+const editorTargetSource =
+  "(?:这(?:一)?(?:段|部分)|当前(?:这)?(?:一)?(?:段|部分)|选中(?:的)?(?:内容|文字|部分)?|第\\s*[^，,；;。！？!?\\s]+\\s*段|上一段|前一段|下一段|后一段|全文|全部)";
+const directRewritePattern = new RegExp(
+  `^(?:请\\s*)?(?:(?:改写|改|润色|调整|压缩|精简)(?=$|\\s*(?:一下|${editorTargetSource}))|(?:把|将).+(?:改写|改得|改成|改|润色|调整|压缩|精简))`,
+  "u",
+);
 const compoundRewritePattern = /^(?:改写|改得|改成|改|润色|调整|压缩|精简)/;
 const compoundReadPattern =
-  /^(?:朗读|读|念)(?:一下|一遍)?(?=$|[\s，,；;]|然后|再)/;
+  /^(?:朗读|读|念)(?:一下|一遍)?(?=$|[\s，,；;。！？!?]|然后|再)/;
 const directUndoPattern =
   /^(?:请\s*)?(?:撤回|恢复刚才(?:的修改)?|回到修改前)(?:一下)?$/;
 const directControlPattern =
@@ -29,7 +33,8 @@ const controlValues: Record<string, NonNullable<VoiceAction["control"]>> = {
 
 const normalize = (value: string) =>
   value
-    .replace(/[。！？!?]/g, "")
+    .trim()
+    .replace(/[。！？!?]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -59,8 +64,10 @@ const normalizeSemanticQuery = (value: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const contentlessSemanticQueries = new Set(["的", "讲", "关于", "一下"]);
+
 const stripActionSeparators = (value: string) =>
-  value.replace(/^(?:(?:[\s，,；;]+)|(?:(?:然后|再)\s*))+/u, "").trim();
+  value.replace(/^(?:(?:[\s，,；;。！？!?]+)|(?:(?:然后|再)\s*))+/u, "").trim();
 
 const unsupportedPlan = (transcript: string): VoicePlan => ({
   transcript,
@@ -88,7 +95,9 @@ export const parseVoicePlan = (rawTranscript: string): VoicePlan => {
 
   if (locate) {
     const query = normalizeSemanticQuery(locate[1]);
-    if (!/[\p{L}\p{N}]/u.test(query)) return unsupportedPlan(transcript);
+    if (!/[\p{L}\p{N}]/u.test(query) || contentlessSemanticQueries.has(query)) {
+      return unsupportedPlan(transcript);
+    }
 
     actions.push({
       intent: "locate",
