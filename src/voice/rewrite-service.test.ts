@@ -409,6 +409,17 @@ describe("RewriteService", () => {
     } satisfies Partial<RewriteServiceError>);
   });
 
+  it("rejects a first-line four-space fence after outer trim normalization", async () => {
+    const output = "    ```ts\nconst x = 1\n    ```";
+    const generated = createGenerator(output);
+    const service = new RewriteService(generated.service);
+
+    await expect(service.rewrite(requestInput())).rejects.toMatchObject({
+      name: "RewriteServiceError",
+      code: "non-plain-output",
+    });
+  });
+
   it.each([
     "正常的纯文本改写。",
     "第一段改写。\n\n第二段改写。",
@@ -430,7 +441,8 @@ describe("RewriteService", () => {
     await expect(service.rewrite(requestInput())).resolves.toBe(output);
   });
 
-  it("treats fence markers indented by four spaces as literal text", async () => {
+  it("treats fence markers indented by four spaces on interior lines as literal text", async () => {
+    // rewrite() trims outer whitespace, but indentation following a newline remains literal text.
     const output = "正常正文\n    ```ts\nconst x = 1\n    ```\n尾文";
     const generated = createGenerator(output);
     const service = new RewriteService(generated.service);
