@@ -1,0 +1,359 @@
+.wordflow {
+  width: 100%;
+  min-height: 100%;
+
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  align-items: stretch;
+
+  display: grid;
+  grid-template-columns: minmax(108px, 1fr) minmax(300px, 70ch) minmax(
+      50px,
+      1fr
+    );
+  grid-template-rows: auto;
+
+  box-sizing: border-box;
+  overscroll-behavior: none;
+  background-color: var(--gray-50);
+  /* background-color: white; */
+}
+
+.svg-icon {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 1em;
+  height: 1em;
+
+  color: currentColor;
+  transition: transform 80ms linear;
+  transform-origin: center;
+
+  & svg {
+    fill: currentColor;
+    width: 100%;
+    height: 100%;
+  }
+}
+
+.left-panel {
+  display: flex;
+  grid-row: 1 / 2;
+  grid-column: 1 / 2;
+  position: relative;
+  z-index: 1;
+
+  .left-padding {
+    flex: 1 1 auto;
+    min-width: 4px;
+  }
+
+  .right-padding {
+    flex: 0 1 12px;
+    min-width: 3px;
+  }
+}
+
+.right-panel {
+  display: flex;
+  flex-flow: column;
+  grid-row: 1 / 2;
+  grid-column: 3 / 4;
+  position: relative;
+  z-index: 1;
+  container-type: inline-size;
+
+  .top-padding {
+    flex: 1 1 auto;
+  }
+
+  @container (max-width: 100px) {
+    .footer-info {
+      display: none;
+    }
+  }
+}
+
+.center-panel {
+  display: flex;
+  grid-row: 1 / 2;
+  grid-column: 2 / 3;
+  width: 100%;
+  height: 100%;
+  border-left: 1px solid var(--gray-300);
+  background: white;
+  border-right: 1px solid var(--gray-300);
+  position: relative;
+
+  box-sizing: border-box;
+}
+
+.footer-info {
+  position: sticky;
+  bottom: 6px;
+  margin-left: 6px;
+  box-sizing: border-box;
+  display: flex;
+  flex-flow: column;
+  font-size: var(--font-d4);
+  color: var(--gray-500);
+  line-height: 1.2;
+  gap: 3px;
+  width: max-content;
+
+  & a {
+    color: currentColor;
+    text-decoration: none;
+  }
+
+  .row {
+    cursor: pointer;
+    display: flex;
+    flex-flow: row nowrap;
+    align-items: center;
+    gap: 3px;
+
+    .svg-icon {
+      top: -1px;
+    }
+
+    &:hover {
+      text-decoration: underline;
+    }
+
+    &.no-show {
+      display: none;
+    }
+  }
+}
+
+.logo-container {
+  position: sticky;
+  top: 0px;
+  grid-row: 1 / 2;
+  grid-column: 2 / 3;
+  width: 100%;
+  height: max-content;
+  background-color: white;
+
+  z-index: 2;
+  box-sizing: border-box;
+
+  .center {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    padding: 8px 24px;
+
+    border-left: 1px solid var(--gray-300);
+    border-right: 1px solid var(--gray-300);
+
+    position: relative;
+    box-sizing: border-box;
+  }
+
+  & a {
+    color: unset;
+    text-decoration: none;
+  }
+
+  .row {
+    grid-row: 1 / 2;
+    grid-column: 2 / 3;
+    background-color: white;
+    display: flex;
+    flex-flow: row;
+    align-items: center;
+    font-size: var(--font-u3);
+    gap: 3px;
+
+    .svg-icon {
+      opacity: 0.7;
+      filter: grayscale(1);
+      -webkit-transform: translateZ(0);
+
+      transition:
+        filter 100ms,
+        opacity 100ms;
+    }
+
+    .name {
+      color: var(--gray-500);
+      font-weight: 600;
+      transition: color 100ms;
+    }
+
+    &:hover {
+      .svg-icon {
+        opacity: 1;
+        filter: grayscale(0);
+      }
+
+      .name {
+        color: #0c336a;
+      }
+    }
+  }
+}
+
+.editor-content {
+  display: flex;
+  width: 100%;
+  height: 100%;
+
+  & wordflow-text-editor {
+    width: 100%;
+    height: 100%;
+  }
+}
+
+.popper-box {
+  /* position: absolute;
+  left: 0px;
+  top: 0px; */
+
+  flex: 0 1 250px;
+  /* flex: 0 1 200px; */
+  height: max-content;
+  z-index: 3;
+  box-shadow:
+    0 0 1px hsla(0, 0%, 0%, 0.6),
+    0 0 3px hsla(0, 0%, 0%, 0.05);
+  border-radius: 4px;
+  font-size: $font-d3;
+
+  display: flex;
+  justify-content: center;
+  box-sizing: border-box;
+  transform: translate(0px, -50%);
+
+  opacity: 1;
+  transition:
+    opacity 150ms,
+    transform 150ms;
+
+  &.hidden {
+    opacity: 0;
+    cursor: default;
+  }
+}
+
+wordflow-sidebar-menu {
+  width: 100%;
+}
+
+.floating-menu-box {
+  z-index: 3;
+  position: relative;
+
+  grid-row: 1 / 2;
+  grid-column: 2 / 3;
+
+  display: flex;
+  justify-content: center;
+  box-sizing: border-box;
+  width: max-content;
+  height: max-content;
+  margin-left: 100%;
+
+  /* Need to use translate3d for a safari sticky bug */
+  /* https://stackoverflow.com/questions/50224855/not-respecting-z-index-on-safari-with-position-sticky */
+  transform: translate3d(-50%, -50%, 0);
+
+  opacity: 1;
+  transition:
+    opacity 150ms,
+    transform 150ms;
+
+  &.hidden {
+    opacity: 0;
+  }
+}
+
+wordflow-floating-menu {
+}
+
+.popper-tooltip {
+  position: absolute;
+  width: max-content;
+  left: 0px;
+  top: 0px;
+  z-index: 20;
+  background: var(--gray-800);
+  color: white;
+  box-shadow:
+    0 0 1px hsla(0, 0%, 0%, 0.6),
+    0 0 3px hsla(0, 0%, 0%, 0.05);
+  padding: 0px 5px 3px;
+  border-radius: 4px;
+  font-size: var(--font-d3);
+
+  display: flex;
+  justify-content: center;
+  box-sizing: border-box;
+  pointer-events: none;
+  text-align: center;
+
+  opacity: 1;
+  transform: scale(1);
+  transform-origin: left center;
+  transition:
+    opacity 150ms,
+    transform 150ms;
+
+  &.hidden {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+
+  .popper-content {
+    max-width: 300px;
+    max-height: 200px;
+    line-height: 1.5;
+    overflow: hidden;
+    display: flex;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .popper-arrow {
+    position: absolute;
+    background: var(--gray-800);
+    width: 8px;
+    height: 8px;
+    transform: rotate(45deg);
+    opacity: 1;
+
+    &.hidden {
+      opacity: 0;
+    }
+  }
+}
+
+wordflow-setting-window {
+  display: flex;
+  z-index: 3;
+  transition: opacity 100ms;
+  opacity: 1;
+
+  &[is-hidden] {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+.toast-container {
+  position: absolute;
+  top: 7px;
+  z-index: 5;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+
+  & nightjar-toast {
+    max-width: 300px;
+  }
+}

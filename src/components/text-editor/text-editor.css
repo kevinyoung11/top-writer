@@ -1,0 +1,152 @@
+.text-editor-container {
+  width: 100%;
+  min-height: 100vh;
+  padding: 60px 70px;
+  background-color: white;
+
+  display: flex;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.text-editor {
+  width: 100%;
+  height: 100%;
+
+  display: flex;
+  box-sizing: border-box;
+}
+
+.tiptap {
+  display: block;
+  width: 100%;
+  height: 100%;
+
+  &:focus {
+    outline: none;
+  }
+
+  & p.is-editor-empty:first-child::before {
+    color: #adb5bd;
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    pointer-events: none;
+  }
+}
+
+button {
+  all: unset;
+  font-size: 14px;
+  padding: 2px 10px;
+  background-color: var(--blue-400);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  cursor: pointer;
+
+  &:hover {
+    background-color: var(--blue-300);
+  }
+
+  &:active {
+    background-color: color-mix(in lab, var(--blue-300), black 5%);
+  }
+}
+
+.collapse-item {
+  position: relative;
+  display: inline;
+  color: var(--gray-700);
+
+  &::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: calc(100% + 2px);
+    height: 1px;
+    background-color: var(--gray-700);
+  }
+}
+
+/* Need to condition the is-highlighted to hack undo capturing highlighting state */
+.text-editor[is-hovering-floating-menu] {
+  & p {
+    &.is-highlighted {
+      background: linear-gradient(
+        135deg,
+        white,
+        hsla(0, 0%, 99%, 1),
+        hsla(0, 0%, 96%, 1),
+        hsla(0, 0%, 92%, 1),
+        hsla(0, 0%, 96%, 1),
+        hsla(0, 0%, 99%, 1),
+        white
+      );
+
+      background-size: 900% 900%;
+      animation: gradient 4000ms ease-in-out infinite;
+    }
+  }
+}
+
+.text-editor[is-hovering-floating-menu],
+.text-editor {
+  & p {
+    margin: 0px;
+    padding: 0px;
+    transition: background linear 300ms;
+
+    &.is-loading {
+      background: linear-gradient(
+        135deg,
+        color-mix(in lab, #f29350, transparent 75%),
+        color-mix(in lab, #c76888, transparent 75%),
+        color-mix(in lab, #8578cd, transparent 75%),
+        color-mix(in lab, #3495dc, transparent 75%),
+        color-mix(in lab, #8578cd, transparent 75%),
+        color-mix(in lab, #c76888, transparent 75%),
+        color-mix(in lab, #f29350, transparent 75%)
+      );
+      background-size: 500% 500%;
+      animation: gradient 3500ms ease-in-out infinite normal both;
+    }
+  }
+}
+
+@keyframes gradient {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+mark {
+  &.loading-highlight {
+    background: linear-gradient(
+      135deg,
+      color-mix(in lab, #f29350, transparent 75%),
+      color-mix(in lab, #c76888, transparent 75%),
+      color-mix(in lab, #8578cd, transparent 75%),
+      color-mix(in lab, #3495dc, transparent 75%),
+      color-mix(in lab, #8578cd, transparent 75%),
+      color-mix(in lab, #c76888, transparent 75%),
+      color-mix(in lab, #f29350, transparent 75%)
+    );
+    background-size: 500% 500%;
+    animation: gradient 4500ms ease-in-out infinite normal both;
+
+    &::selection {
+      background-color: transparent;
+    }
+  }
+}
