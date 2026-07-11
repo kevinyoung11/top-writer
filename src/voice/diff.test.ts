@@ -42,6 +42,22 @@ const expectValidDiff = (original: string, replacement: string): void => {
   ).toBe(true);
 };
 
+const hasIsolatedSurrogate = (text: string): boolean => {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 const stubSegmenter = (Segmenter: unknown): void => {
   vi.stubGlobal("Intl", { Segmenter });
 };
@@ -231,6 +247,20 @@ describe("buildDiffSegments", () => {
     const replacement = `${"甲".repeat(70_000)}新`;
 
     expectValidDiff(original, replacement);
+  });
+
+  it("does not split surrogate pairs in the oversized raw fallback", () => {
+    stubSegmenter(undefined);
+
+    const original = `${"甲".repeat(70_000)}🙂`;
+    const replacement = `${"甲".repeat(70_000)}🚀`;
+    const segments = buildDiffSegments(original, replacement);
+
+    expect(reconstructOriginal(segments)).toBe(original);
+    expect(reconstructReplacement(segments)).toBe(replacement);
+    expect(
+      segments.every((segment) => !hasIsolatedSurrogate(segment.text)),
+    ).toBe(true);
   });
 
   it("does not mutate either input", () => {

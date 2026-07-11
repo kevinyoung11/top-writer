@@ -259,6 +259,22 @@ const isExactDiff = (
   reconstructOriginal(segments) === original &&
   reconstructReplacement(segments) === replacement;
 
+const hasCompleteSurrogatePairs = (text: string): boolean => {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = text.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return false;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
 const buildCharacterDiff = (
   original: string,
   replacement: string,
@@ -273,7 +289,12 @@ const buildCharacterDiff = (
   const diffs = characterDiffs ?? runDiff(original, replacement);
   const segments = diffs ? mergeSegments(diffs) : [];
 
-  if (isExactDiff(segments, original, replacement)) return segments;
+  if (
+    isExactDiff(segments, original, replacement) &&
+    segments.every((segment) => hasCompleteSurrogatePairs(segment.text))
+  ) {
+    return segments;
+  }
 
   return [
     ...(original ? [{ kind: "delete" as const, text: original }] : []),
