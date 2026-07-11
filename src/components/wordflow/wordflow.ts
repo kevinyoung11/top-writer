@@ -20,6 +20,7 @@ import { SemanticLocator } from '../../voice/semantic-locator';
 import { BrowserSpeechRecognizer } from '../../voice/speech/browser-recognizer';
 import { BrowserSpeechSynthesizer } from '../../voice/speech/browser-synthesizer';
 import { VoiceCopilotController } from '../../voice/voice-copilot-controller';
+import type { VoiceCopilotPanel } from '../voice-copilot/voice-copilot';
 import { PromptManager } from './prompt-manager';
 import { RemotePromptManager } from './remote-prompt-manager';
 import { UserConfigManager, UserConfig } from './user-config';
@@ -111,8 +112,17 @@ export class WordflowWordflow extends LitElement {
   @query('.wordflow')
   workflowElement: HTMLElement | undefined;
 
+  @query('[data-voice-entry]')
+  private voiceEntry: HTMLButtonElement | undefined;
+
+  @query('#voice-copilot-drawer top-writer-voice-copilot')
+  private voiceDrawerPanel: VoiceCopilotPanel | undefined;
+
   @state()
   showSettingWindow = false;
+
+  @state()
+  private voiceDrawerOpen = false;
 
   @state()
   loadingActionIndex: number | null = null;
@@ -273,6 +283,38 @@ export class WordflowWordflow extends LitElement {
       getModelContext: () => ({ userConfig: this.userConfig, userID: this.initUserID() })
     });
     this.requestUpdate();
+  }
+
+  private openVoiceDrawer() {
+    this.voiceDrawerOpen = true;
+    void this.focusVoiceDrawer();
+  }
+
+  private async focusVoiceDrawer() {
+    await this.updateComplete;
+    const panel = this.voiceDrawerPanel;
+    if (!panel) return;
+    await panel.updateComplete;
+    if (this.voiceDrawerOpen) panel.focusHeading();
+  }
+
+  private closeVoiceDrawer() {
+    if (this.voiceController?.state.phase === 'listening') {
+      this.voiceController.cancel();
+    }
+    this.voiceDrawerOpen = false;
+    void this.updateComplete.then(() => this.voiceEntry?.focus());
+  }
+
+  private drawerKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    this.closeVoiceDrawer();
+  }
+
+  private drawerBackdropClick(event: MouseEvent) {
+    if (event.target !== event.currentTarget) return;
+    this.closeVoiceDrawer();
   }
 
   /**
@@ -588,8 +630,17 @@ export class WordflowWordflow extends LitElement {
         </div>
 
         <div class="right-panel">
+          <button
+            class="voice-entry-rail"
+            data-voice-entry
+            aria-label="语音副驾"
+            aria-expanded=${this.voiceDrawerOpen ? 'true' : 'false'}
+            aria-controls="voice-copilot-drawer"
+            @click=${this.openVoiceDrawer}
+          >
+            语音副驾
+          </button>
           <div class="top-padding"></div>
-          ${this.voiceController ? html`<top-writer-voice-copilot .controller=${this.voiceController} .preferences=${this.voicePreferences}></top-writer-voice-copilot>` : null}
           <div class="footer-info">
             <a
               class="row"
@@ -633,6 +684,33 @@ export class WordflowWordflow extends LitElement {
             </div>
           </div>
         </div>
+
+        ${this.voiceDrawerOpen
+          ? html`
+              <div
+                class="voice-drawer-backdrop"
+                @click=${this.drawerBackdropClick}
+              ></div>
+              <aside
+                id="voice-copilot-drawer"
+                role="dialog"
+                aria-modal="true"
+                aria-label="语音副驾"
+                @keydown=${this.drawerKeydown}
+              >
+                <button
+                  aria-label="关闭语音副驾"
+                  @click=${this.closeVoiceDrawer}
+                >
+                  关闭
+                </button>
+                <top-writer-voice-copilot
+                  .controller=${this.voiceController}
+                  .preferences=${this.voicePreferences}
+                ></top-writer-voice-copilot>
+              </aside>
+            `
+          : null}
 
         <div class="floating-menu-box hidden" id="floating-menu-box">
           <wordflow-floating-menu
