@@ -763,7 +763,18 @@ export class VoiceCopilotController extends EventTarget {
         segments: buildDiffSegments(range.text, replacement),
         mode: "rewrite",
       };
-      const staged = this.dependencies.editor.stagePreview(preview);
+      const bridge = this.dependencies.editor as EditorBridge & {
+        stageVoiceRewriteSuggestion?: (
+          value: RewritePreview,
+        ) => Promise<ReturnType<EditorBridge["stagePreview"]>>;
+      };
+      const staged = bridge.stageVoiceRewriteSuggestion
+        ? await bridge.stageVoiceRewriteSuggestion(preview)
+        : bridge.stagePreview(preview);
+      if (!this.isOperationCurrent(token)) {
+        this.dependencies.editor.discardPreview(preview.id);
+        return false;
+      }
       if (!staged.ok) {
         this.setError(
           staged.reason === "stale-revision"

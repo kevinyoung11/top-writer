@@ -755,6 +755,33 @@ describe("VoiceCopilotController", () => {
     });
   });
 
+  it("does not surface a voice review that finishes staging after cancellation", async () => {
+    const editor = new FakeEditor();
+    const deferred = createDeferred<BridgeResult<void>>();
+    let stagedId = "";
+    (
+      editor as unknown as {
+        stageVoiceRewriteSuggestion: (
+          preview: RewritePreview,
+        ) => Promise<BridgeResult<void>>;
+      }
+    ).stageVoiceRewriteSuggestion = async (preview) => {
+      stagedId = preview.id;
+      editor.staged.set(preview.id, clone(preview));
+      return deferred.promise;
+    };
+    const { controller } = createController({ editor });
+
+    const rewriting = controller.submitTranscript("改写当前段");
+    await drainMicrotasks();
+    controller.cancel();
+    deferred.resolve(ok(undefined));
+    await rewriting;
+
+    expect(controller.state).toMatchObject({ phase: "idle", preview: null });
+    expect(editor.discarded).toEqual([stagedId]);
+  });
+
   it("discards rejected previews and immediately invalidates a preview after an external revision", async () => {
     const rejected = createController();
     await rejected.controller.submitTranscript("改写当前段");
