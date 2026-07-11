@@ -301,6 +301,7 @@ export class EditorBridge {
       const from = nodeFrom + 1;
       const to = nodeTo - 1;
       const index = paragraphs.length;
+      const previous = paragraphs[index - 1];
       paragraphs.push({
         id: `${node.type.name}-${nodeFrom}-${nodeTo}`,
         index,
@@ -310,6 +311,7 @@ export class EditorBridge {
         from,
         to,
         text: textForRange(doc, from, to),
+        separatorBefore: previous ? textForRange(doc, previous.to, from) : "",
       });
     });
 

@@ -43,6 +43,7 @@ export interface ParagraphRef {
   from: number;
   to: number;
   text: string;
+  separatorBefore?: string;
 }
 
 export interface VoiceRange {

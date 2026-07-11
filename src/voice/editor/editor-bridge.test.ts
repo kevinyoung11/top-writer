@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Collapse } from "../../components/text-editor/collapse-node";
 import { EditHighlight } from "../../components/text-editor/edit-highlight";
 import { LoadingHighlight } from "../../components/text-editor/loading-highlight";
-import type { RewritePreview, VoiceRange } from "../types";
+import type { ParagraphRef, RewritePreview, VoiceRange } from "../types";
 import { EditorBridge, type BridgeResult } from "./editor-bridge";
 import { VoiceHighlightExtension } from "./voice-highlight-extension";
 
@@ -170,6 +170,8 @@ const rangeFromPositions = (
   };
 };
 
+const separatorBefore = (paragraph: ParagraphRef) => paragraph.separatorBefore;
+
 const makePreview = (
   range: VoiceRange,
   replacementText: string,
@@ -252,6 +254,74 @@ describe("EditorBridge", () => {
     });
     expect(snapshot.currentParagraphIndex).toBe(1);
     expect(snapshot.lastSpokenParagraphIndex).toBe(3);
+
+    bridge.destroy();
+  });
+
+  it("captures the exact structural separator before a paragraph after a horizontal rule", () => {
+    const editor = createEditor("<p>Alpha</p><hr><p>Beta</p>");
+    const bridge = new EditorBridge(editor);
+    const initial = bridge.getSnapshot();
+    const first = initial.paragraphs[0];
+    const second = initial.paragraphs[1];
+    const from = first.from + 1;
+    const to = second.to - 1;
+
+    editor.view.dispatch(
+      editor.state.tr.setSelection(
+        TextSelection.create(editor.state.doc, from, to),
+      ),
+    );
+
+    const snapshot = bridge.getSnapshot();
+    const selectedFirst = snapshot.paragraphs[0];
+    const selectedSecond = snapshot.paragraphs[1];
+    const expectedSeparator = editor.state.doc.textBetween(
+      selectedFirst.to,
+      selectedSecond.from,
+      "\n\n",
+      "\n",
+    );
+    const expectedSelectionText = editor.state.doc.textBetween(
+      from,
+      to,
+      "\n\n",
+      "\n",
+    );
+
+    expect(separatorBefore(selectedSecond)).toBe(expectedSeparator);
+    expect(snapshot.selection?.text).toBe(expectedSelectionText);
+    expect(
+      selectedFirst.text.slice(from - selectedFirst.from) +
+        separatorBefore(selectedSecond) +
+        selectedSecond.text.slice(0, to - selectedSecond.from),
+    ).toBe(expectedSelectionText);
+
+    bridge.destroy();
+  });
+
+  it("keeps canonical separators for adjacent paragraphs and nested textblocks", () => {
+    const editor = createEditor(
+      "<p>Alpha</p><p>Beta</p><ul><li><p>Gamma</p></li></ul><p>Delta<br>line</p>",
+    );
+    const bridge = new EditorBridge(editor);
+    const snapshot = bridge.getSnapshot();
+    const first = snapshot.paragraphs[0];
+    const last = snapshot.paragraphs[snapshot.paragraphs.length - 1];
+
+    expect(separatorBefore(first)).toBe("");
+    for (const [index, paragraph] of snapshot.paragraphs.entries()) {
+      if (index === 0) continue;
+      const previous = snapshot.paragraphs[index - 1];
+      expect(separatorBefore(paragraph)).toBe(
+        editor.state.doc.textBetween(previous.to, paragraph.from, "\n\n", "\n"),
+      );
+    }
+    expect(
+      snapshot.paragraphs
+        .map((paragraph) => `${separatorBefore(paragraph)}${paragraph.text}`)
+        .join(""),
+    ).toBe(editor.state.doc.textBetween(first.from, last.to, "\n\n", "\n"));
 
     bridge.destroy();
   });
