@@ -1,0 +1,9 @@
+:host { display: block; color: var(--gray-700); font-size: var(--font-d1); }
+section[aria-label="语音副驾"] { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--gray-300); background: white; }
+h1, h2 { margin: 0; color: var(--gray-800); } h1 { font-size: var(--font-u1); } h2 { font-size: var(--font-d2); }
+form, form label, .preview div { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+input { min-width: 0; flex: 1 1 12rem; padding: 6px; border: 1px solid var(--gray-400); }
+button { padding: 6px 8px; border: 1px solid var(--gray-400); border-radius: 4px; background: white; color: inherit; font: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--blue-500); outline-offset: 2px; }
+del { color: #8a2525; } ins { color: #176a3a; } .preview { overflow-wrap: anywhere; white-space: pre-wrap; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
