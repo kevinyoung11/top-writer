@@ -97,6 +97,8 @@ img.ProseMirror-separator {
   width: 100%;
   height: 100%;
 
+  zoom: var(--editor-zoom, 1);
+
   display: flex;
   box-sizing: border-box;
 }

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Collapse } from "../../components/text-editor/collapse-node";
 import { EditHighlight } from "../../components/text-editor/edit-highlight";
 import { LoadingHighlight } from "../../components/text-editor/loading-highlight";
+import { openFormattingExtensions } from "../../components/text-editor/open-formatting-extensions";
 import type { ParagraphRef, RewritePreview, VoiceRange } from "../types";
 import { EditorBridge, type BridgeResult } from "./editor-bridge";
 import { VoiceHighlightExtension } from "./voice-highlight-extension";
@@ -1304,6 +1305,30 @@ describe("EditorBridge", () => {
 
     textEditor.remove();
     expect(reconnectedEditor?.isDestroyed).toBe(true);
+  });
+
+  it("installs open-source underline, alignment, and table editing extensions", async () => {
+    const editor = new Editor({
+      element: document.createElement("div"),
+      extensions: [
+        StarterKit.configure({ underline: false }),
+        ...openFormattingExtensions,
+      ],
+      content: DEFAULT_CONTENT,
+    });
+    editors.push(editor);
+    const commands = editor.commands as unknown as Record<string, unknown>;
+    const commandChain = () => editor.chain() as unknown as Record<
+      string,
+      (...args: unknown[]) => { run: () => boolean }
+    >;
+    expect(commands.toggleUnderline).toBeTypeOf("function");
+    expect(commands.setTextAlign).toBeTypeOf("function");
+    expect(commands.insertTable).toBeTypeOf("function");
+
+    expect(commandChain().setTextAlign("center").run()).toBe(true);
+    expect(editor.isActive({ textAlign: "center" })).toBe(true);
+    expect(commandChain().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run()).toBe(true);
   });
 
   it("does not initialize while detached and initializes once after reconnect", async () => {

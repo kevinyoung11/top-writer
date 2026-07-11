@@ -48,6 +48,49 @@ describe("AgentToolbar", () => {
     expect(facade.execute).toHaveBeenCalledWith("insertTable");
   });
 
+  it("offers the Agent Editor zoom, block type, and full open-source formatting controls", async () => {
+    facade.supports = () => true;
+    toolbar.requestUpdate();
+    await toolbar.updateComplete;
+    const root = toolbar.shadowRoot!;
+
+    expect(root.querySelector<HTMLButtonElement>("[aria-label='Zoom out']")?.textContent).toBe("−");
+    expect(root.querySelector("[data-zoom-value]")?.textContent).toContain("100%");
+    expect(root.querySelector<HTMLButtonElement>("[aria-label='Zoom in']")?.textContent).toBe("+");
+
+    const blockType = root.querySelector<HTMLSelectElement>("[aria-label='Block type']")!;
+    expect(Array.from(blockType.options, option => option.value)).toEqual([
+      "paragraph",
+      "heading1",
+      "heading2",
+      "heading3"
+    ]);
+    blockType.value = "heading1";
+    blockType.dispatchEvent(new Event("change"));
+
+    for (const label of [
+      "Bold",
+      "Italic",
+      "Strike through",
+      "Underline",
+      "Align left",
+      "Align center",
+      "Align right",
+      "Bullet list",
+      "Ordered list",
+      "Insert table"
+    ]) {
+      expect(root.querySelector(`[aria-label='${label}']`)).not.toBeNull();
+    }
+
+    root.querySelector<HTMLButtonElement>("[aria-label='Zoom in']")?.click();
+    root.querySelector<HTMLButtonElement>("[aria-label='Strike through']")?.click();
+
+    expect(facade.execute).toHaveBeenCalledWith("setHeading1");
+    expect(facade.execute).toHaveBeenCalledWith("zoomIn");
+    expect(facade.execute).toHaveBeenCalledWith("strike");
+  });
+
   it("delegates the accessible AI launch button without calling a model API", () => {
     toolbar.shadowRoot?.querySelector<HTMLButtonElement>("[aria-label='Ask AI']")?.click();
 

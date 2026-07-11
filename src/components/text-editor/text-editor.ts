@@ -26,6 +26,7 @@ import { EditHighlight } from './edit-highlight';
 import { EventHandler } from './event-handler';
 import { LoadingHighlight } from './loading-highlight';
 import { SidebarMenu } from './sidebar-menu-plugin';
+import { openFormattingExtensions } from './open-formatting-extensions';
 
 // Types
 import type { ResolvedPos } from '@tiptap/pm/model';
@@ -85,6 +86,10 @@ export class WordflowTextEditor extends LitElement {
 
   @property({ attribute: false })
   textGenerationService!: TextGenerationService;
+
+  /** The document's visual zoom, controlled by the outer Agent Editor toolbar. */
+  @property({ type: Number })
+  zoomPercent = 100;
 
   @query('.text-editor-container')
   containerElement: HTMLElement | undefined;
@@ -216,7 +221,8 @@ export class WordflowTextEditor extends LitElement {
     // Customize the StarterKit extension to exclude customized extensions
     const myStarterKit = StarterKit.configure({
       text: false,
-      paragraph: false
+      paragraph: false,
+      underline: false
     });
 
     const myEditHighlight = EditHighlight.configure({
@@ -274,6 +280,7 @@ export class WordflowTextEditor extends LitElement {
         myStarterKit,
         myParagraph,
         myText,
+        ...openFormattingExtensions,
         myEditHighlight,
         myLoadingHighlight,
         Collapse,
@@ -1141,7 +1148,10 @@ export class WordflowTextEditor extends LitElement {
   //                           Templates and Styles                           ||
   //==========================================================================||
   render() {
-    return html` <div class="text-editor-container">
+    return html` <div
+      class="text-editor-container"
+      style=${`--editor-zoom: ${Math.min(150, Math.max(50, this.zoomPercent)) / 100}`}
+    >
       <div
         class="text-editor"
         ?is-hovering-floating-menu=${this.isHoveringFloatingMenu}

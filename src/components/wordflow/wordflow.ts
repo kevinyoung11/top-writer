@@ -980,6 +980,7 @@ export class WordflowWordflow extends LitElement {
           ></top-writer-agent-toolbar>
           <div class="editor-content">
             <wordflow-text-editor
+              .zoomPercent=${this.editorZoom}
               .popperSidebarBox=${this.popperSidebarBox}
               .floatingMenuBox=${this.floatingMenuBox}
               .updateSidebarMenu=${this.updateSidebarMenu}
