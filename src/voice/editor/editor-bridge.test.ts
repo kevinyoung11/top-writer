@@ -18,6 +18,78 @@ const DEFAULT_CONTENT =
 
 const editors: Editor[] = [];
 
+class InertWorker extends EventTarget {
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onmessageerror: ((event: MessageEvent) => void) | null = null;
+  postMessage() {}
+  terminate() {}
+}
+
+class MemoryStorage implements Storage {
+  private readonly values = new Map<string, string>();
+
+  get length() {
+    return this.values.size;
+  }
+
+  clear() {
+    this.values.clear();
+  }
+
+  getItem(key: string) {
+    return this.values.get(key) ?? null;
+  }
+
+  key(index: number) {
+    return [...this.values.keys()][index] ?? null;
+  }
+
+  removeItem(key: string) {
+    this.values.delete(key);
+  }
+
+  setItem(key: string, value: string) {
+    this.values.set(key, value);
+  }
+}
+
+type TestTextEditor = HTMLElement & {
+  floatingMenuBox: Promise<HTMLElement>;
+  popperSidebarBox: Promise<HTMLElement>;
+  updateSidebarMenu: () => Promise<void>;
+  textGenLocalWorker: Worker;
+  updateComplete: Promise<boolean>;
+  editor: Editor | null;
+  initEditor(): void;
+  getVoiceEditorBridge(): EditorBridge | null;
+};
+
+const createTextEditorElement = async () => {
+  const textEditorModule = await vi.importActual<Record<string, unknown>>(
+    "../../components/text-editor/text-editor",
+  );
+  const TextEditorConstructor =
+    textEditorModule.WordflowTextEditor as CustomElementConstructor;
+  const memoryStorage = new MemoryStorage();
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: memoryStorage,
+  });
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: memoryStorage,
+  });
+
+  const textEditor = document.createElement(
+    "wordflow-text-editor",
+  ) as TestTextEditor;
+  textEditor.floatingMenuBox = Promise.resolve(document.createElement("div"));
+  textEditor.popperSidebarBox = Promise.resolve(document.createElement("div"));
+  textEditor.updateSidebarMenu = async () => {};
+  textEditor.textGenLocalWorker = new InertWorker() as unknown as Worker;
+  return { textEditor, TextEditorConstructor };
+};
+
 const LegacyParagraph = Paragraph.extend({
   addAttributes() {
     return {
@@ -311,6 +383,57 @@ describe("EditorBridge", () => {
       reason: "preview-not-found",
     });
 
+    bridge.destroy();
+  });
+
+  it("rejects no-op previews without changing the document or manual history", () => {
+    const editor = createEditor("<p>abc</p>");
+    const bridge = new EditorBridge(editor);
+    const initialDoc = editor.getJSON();
+    const initialParagraph = bridge.getSnapshot().paragraphs[0];
+
+    editor.view.dispatch(
+      editor.state.tr.insertText("X", initialParagraph.from + 1),
+    );
+    expect(bridge.getSnapshot().paragraphs[0].text).toBe("aXbc");
+
+    const afterManualEdit = editor.getJSON();
+    const revision = bridge.getRevision();
+    const historyDepth = undoDepth(editor.state);
+    const redoHistoryDepth = redoDepth(editor.state);
+    const paragraph = bridge.getSnapshot().paragraphs[0];
+    const insertionPoint = paragraph.from + 2;
+    const emptyRange = rangeFromPositions(
+      bridge,
+      editor,
+      insertionPoint,
+      insertionPoint,
+    );
+
+    expect(
+      bridge.stagePreview(makePreview(emptyRange, "", "noop-empty")),
+    ).toEqual({ ok: false, reason: "invalid-range" });
+    expect(
+      bridge.stagePreview(
+        makePreview(
+          rangeForParagraph(bridge, 0),
+          paragraph.text,
+          "noop-identical",
+        ),
+      ),
+    ).toEqual({ ok: false, reason: "invalid-range" });
+
+    expect(editor.getJSON()).toEqual(afterManualEdit);
+    expect(bridge.getRevision()).toBe(revision);
+    expect(undoDepth(editor.state)).toBe(historyDepth);
+    expect(redoDepth(editor.state)).toBe(redoHistoryDepth);
+    expect(bridge.previewUndoLastVoiceEdit()).toEqual({
+      ok: false,
+      reason: "nothing-to-undo",
+    });
+
+    expect(undo(editor.state, editor.view.dispatch)).toBe(true);
+    expect(editor.getJSON()).toEqual(initialDoc);
     bridge.destroy();
   });
 
@@ -658,79 +781,12 @@ describe("EditorBridge", () => {
   });
 
   it("registers one bridge on WordflowTextEditor and exposes its lifecycle event", async () => {
-    class InertWorker extends EventTarget {
-      onmessage: ((event: MessageEvent) => void) | null = null;
-      onmessageerror: ((event: MessageEvent) => void) | null = null;
-      postMessage() {}
-      terminate() {}
-    }
-
-    class MemoryStorage implements Storage {
-      private readonly values = new Map<string, string>();
-
-      get length() {
-        return this.values.size;
-      }
-
-      clear() {
-        this.values.clear();
-      }
-
-      getItem(key: string) {
-        return this.values.get(key) ?? null;
-      }
-
-      key(index: number) {
-        return [...this.values.keys()][index] ?? null;
-      }
-
-      removeItem(key: string) {
-        this.values.delete(key);
-      }
-
-      setItem(key: string, value: string) {
-        this.values.set(key, value);
-      }
-    }
-
-    const textEditorModule = await vi.importActual<Record<string, unknown>>(
-      "../../components/text-editor/text-editor",
-    );
-    const TextEditorConstructor =
-      textEditorModule.WordflowTextEditor as CustomElementConstructor;
-    type TestTextEditor = HTMLElement & {
-      floatingMenuBox: Promise<HTMLElement>;
-      popperSidebarBox: Promise<HTMLElement>;
-      updateSidebarMenu: () => Promise<void>;
-      textGenLocalWorker: Worker;
-      updateComplete: Promise<boolean>;
-      editor: Editor | null;
-      initEditor(): void;
-      getVoiceEditorBridge(): EditorBridge | null;
-    };
+    const { textEditor, TextEditorConstructor } =
+      await createTextEditorElement();
 
     expect(customElements.get("wordflow-text-editor")).toBe(
       TextEditorConstructor,
     );
-    const memoryStorage = new MemoryStorage();
-    Object.defineProperty(globalThis, "localStorage", {
-      configurable: true,
-      value: memoryStorage,
-    });
-    Object.defineProperty(window, "localStorage", {
-      configurable: true,
-      value: memoryStorage,
-    });
-
-    const textEditor = document.createElement(
-      "wordflow-text-editor",
-    ) as TestTextEditor;
-    textEditor.floatingMenuBox = Promise.resolve(document.createElement("div"));
-    textEditor.popperSidebarBox = Promise.resolve(
-      document.createElement("div"),
-    );
-    textEditor.updateSidebarMenu = async () => {};
-    textEditor.textGenLocalWorker = new InertWorker() as unknown as Worker;
 
     const received = { readyEvent: null as CustomEvent<EditorBridge> | null };
     const getReadyEvent = (): CustomEvent<EditorBridge> => {
@@ -773,6 +829,132 @@ describe("EditorBridge", () => {
     expect(reconnectedEditor).not.toBe(ownedEditor);
     expect(reconnectedEditor?.isDestroyed).toBe(false);
     expect(getReadyEvent().detail).toBe(reconnectedBridge);
+
+    textEditor.remove();
+    expect(reconnectedEditor?.isDestroyed).toBe(true);
+  });
+
+  it("does not initialize while detached and initializes once after reconnect", async () => {
+    const { textEditor } = await createTextEditorElement();
+    const readyEvents: CustomEvent<EditorBridge>[] = [];
+    textEditor.addEventListener("editor-bridge-ready", (event) => {
+      readyEvents.push(event as CustomEvent<EditorBridge>);
+    });
+
+    document.body.append(textEditor);
+    textEditor.remove();
+    await textEditor.updateComplete;
+
+    expect(textEditor.isConnected).toBe(false);
+    expect(textEditor.editor).toBeNull();
+    expect(textEditor.getVoiceEditorBridge()).toBeNull();
+    expect(readyEvents).toHaveLength(0);
+
+    document.body.append(textEditor);
+    await textEditor.updateComplete;
+
+    const editor = textEditor.editor;
+    const bridge = textEditor.getVoiceEditorBridge();
+    expect(editor).not.toBeNull();
+    expect(bridge).toBeInstanceOf(EditorBridge);
+    expect(readyEvents).toHaveLength(1);
+    expect(readyEvents[0].detail).toBe(bridge);
+
+    textEditor.initEditor();
+    expect(textEditor.editor).toBe(editor);
+    expect(textEditor.getVoiceEditorBridge()).toBe(bridge);
+    expect(readyEvents).toHaveLength(1);
+
+    textEditor.remove();
+    expect(editor?.isDestroyed).toBe(true);
+  });
+
+  it("preserves the complete document when WordflowTextEditor reconnects", async () => {
+    const { textEditor } = await createTextEditorElement();
+    const readyEvents: CustomEvent<EditorBridge>[] = [];
+    textEditor.addEventListener("editor-bridge-ready", (event) => {
+      readyEvents.push(event as CustomEvent<EditorBridge>);
+    });
+    document.body.append(textEditor);
+    await textEditor.updateComplete;
+
+    const firstEditor = textEditor.editor;
+    const firstBridge = textEditor.getVoiceEditorBridge();
+    if (!firstEditor || !firstBridge) {
+      throw new Error("Expected the first editor and bridge to initialize");
+    }
+    const preservedHeading = `重连后必须保留的标题${"正文".repeat(
+      firstEditor.state.doc.content.size + 10,
+    )}`;
+    const distinctiveDocument = {
+      type: "doc",
+      content: [
+        {
+          type: "heading",
+          attrs: { level: 2 },
+          content: [
+            {
+              type: "text",
+              marks: [{ type: "bold" }],
+              text: preservedHeading,
+            },
+          ],
+        },
+        {
+          type: "bulletList",
+          content: [
+            {
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "嵌套列表正文" }],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "独特的用户文档结尾。" }],
+        },
+      ],
+    };
+    const currentSelection = firstEditor.state.selection;
+    const replacementDocument =
+      firstEditor.schema.nodeFromJSON(distinctiveDocument);
+    const transaction = firstEditor.state.tr.replaceWith(
+      0,
+      firstEditor.state.doc.content.size,
+      replacementDocument.content,
+    );
+    transaction.setSelection(
+      TextSelection.create(
+        transaction.doc,
+        currentSelection.anchor,
+        currentSelection.head,
+      ),
+    );
+    firstEditor.view.dispatch(transaction);
+    const expectedDocument = firstEditor.getJSON();
+    const expectedText = firstEditor.getText();
+
+    textEditor.remove();
+    expect(firstEditor.isDestroyed).toBe(true);
+
+    document.body.append(textEditor);
+    await textEditor.updateComplete;
+
+    const reconnectedEditor = textEditor.editor;
+    const reconnectedBridge = textEditor.getVoiceEditorBridge();
+    expect(reconnectedEditor).not.toBeNull();
+    expect(reconnectedEditor).not.toBe(firstEditor);
+    expect(reconnectedBridge).toBeInstanceOf(EditorBridge);
+    expect(reconnectedBridge).not.toBe(firstBridge);
+    expect(reconnectedEditor?.getJSON()).toEqual(expectedDocument);
+    expect(reconnectedEditor?.getText()).toBe(expectedText);
+    expect(readyEvents).toHaveLength(2);
+    expect(readyEvents[1].detail).toBe(reconnectedBridge);
 
     textEditor.remove();
     expect(reconnectedEditor?.isDestroyed).toBe(true);

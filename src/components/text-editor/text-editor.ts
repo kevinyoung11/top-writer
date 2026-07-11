@@ -104,6 +104,7 @@ export class WordflowTextEditor extends LitElement {
 
   editor: Editor | null = null;
   private editorBridge: EditorBridge | null = null;
+  private detachedEditorContent: JSONContent | null = null;
   curEditID = 0;
 
   containerBBox: DOMRect = {
@@ -134,6 +135,9 @@ export class WordflowTextEditor extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    if (this.editor !== null) {
+      this.detachedEditorContent = this.editor.getJSON();
+    }
     this.editorBridge?.destroy();
     this.editorBridge = null;
     this.editor?.destroy();
@@ -141,8 +145,6 @@ export class WordflowTextEditor extends LitElement {
   }
 
   firstUpdated() {
-    this.initEditor();
-
     // Initialize the floating menu's position
     if (this.floatingMenuBox === undefined) {
       console.error(
@@ -254,22 +256,26 @@ export class WordflowTextEditor extends LitElement {
     // Show welcome text if the user has never run a prompt
     let defaultText: string | JSONContent = '';
 
-    // Try to restore the last session's content
-    const lastEditorContent = localStorage.getItem('last-editor-content');
-    if (lastEditorContent !== null) {
-      defaultText = JSON.parse(lastEditorContent) as JSONContent;
-    }
-
-    const hasRunAPrompt = localStorage.getItem('has-run-a-prompt');
-    if (hasRunAPrompt === null) {
-      defaultText = `${WELCOME_TEXT}`;
+    if (this.detachedEditorContent !== null) {
+      defaultText = this.detachedEditorContent;
     } else {
-      // TODO: Safari web app can't save to local storage before window close
-      defaultText = '';
-    }
+      // Try to restore the last session's content
+      const lastEditorContent = localStorage.getItem('last-editor-content');
+      if (lastEditorContent !== null) {
+        defaultText = JSON.parse(lastEditorContent) as JSONContent;
+      }
 
-    if (DEV_MODE) {
-      defaultText = `${WELCOME_TEXT}`;
+      const hasRunAPrompt = localStorage.getItem('has-run-a-prompt');
+      if (hasRunAPrompt === null) {
+        defaultText = `${WELCOME_TEXT}`;
+      } else {
+        // TODO: Safari web app can't save to local storage before window close
+        defaultText = '';
+      }
+
+      if (DEV_MODE) {
+        defaultText = `${WELCOME_TEXT}`;
+      }
     }
 
     const myPlaceholder = Placeholder.configure({

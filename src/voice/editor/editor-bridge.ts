@@ -363,6 +363,7 @@ export class EditorBridge {
       preview.id.length === 0 ||
       this.stagedPreviews.has(preview.id) ||
       preview.originalText !== preview.range.text ||
+      preview.originalText === preview.replacementText ||
       !this.rangeMatchesDocument(preview.range) ||
       !diffReconstructsPreview(preview)
     ) {
