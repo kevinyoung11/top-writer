@@ -33,6 +33,45 @@ interface ValidatedTarget {
   lastPosition: number;
 }
 
+const canReconstructParagraph = (
+  paragraph: EditorSnapshot["paragraphs"][number],
+) =>
+  typeof paragraph.text === "string" &&
+  Number.isSafeInteger(paragraph.index) &&
+  Number.isSafeInteger(paragraph.nodeFrom) &&
+  Number.isSafeInteger(paragraph.nodeTo) &&
+  Number.isSafeInteger(paragraph.from) &&
+  Number.isSafeInteger(paragraph.to) &&
+  paragraph.nodeFrom < paragraph.nodeTo &&
+  paragraph.from === paragraph.nodeFrom + 1 &&
+  paragraph.to === paragraph.nodeTo - 1 &&
+  paragraph.from <= paragraph.to &&
+  paragraph.text.length === paragraph.to - paragraph.from;
+
+const reconstructRangeText = (
+  range: VoiceRange,
+  paragraphs: EditorSnapshot["paragraphs"],
+): string | null => {
+  let text = "";
+
+  for (const [position, paragraph] of paragraphs.entries()) {
+    if (!canReconstructParagraph(paragraph)) return null;
+
+    const from = Math.max(range.from, paragraph.from);
+    const to = Math.min(range.to, paragraph.to);
+    const slice =
+      from < to
+        ? paragraph.text.slice(from - paragraph.from, to - paragraph.from)
+        : "";
+    if (slice.length !== Math.max(0, to - from)) return null;
+
+    if (position > 0) text += "\n\n";
+    text += slice;
+  }
+
+  return text;
+};
+
 const validateTarget = (
   snapshot: EditorSnapshot,
   range: VoiceRange,
@@ -50,37 +89,51 @@ const validateTarget = (
     return null;
   }
 
-  const positions = range.paragraphIndexes.map((index) => {
-    if (!Number.isInteger(index)) return -1;
-    return snapshot.paragraphs.findIndex(
-      (paragraph) => paragraph.index === index,
+  const selected = snapshot.paragraphs
+    .map((paragraph, position) => ({ paragraph, position }))
+    .filter(
+      ({ paragraph }) =>
+        range.from < paragraph.nodeTo && range.to > paragraph.nodeFrom,
     );
-  });
-  if (positions.some((position) => position < 0)) return null;
+  if (selected.length !== range.paragraphIndexes.length) return null;
 
-  for (let index = 1; index < positions.length; index += 1) {
+  for (let index = 0; index < selected.length; index += 1) {
     if (
-      positions[index] !== positions[index - 1] + 1 ||
-      range.paragraphIndexes[index] !== range.paragraphIndexes[index - 1] + 1
+      !Number.isInteger(range.paragraphIndexes[index]) ||
+      selected[index].paragraph.index !== range.paragraphIndexes[index] ||
+      !canReconstructParagraph(selected[index].paragraph) ||
+      (index > 0 &&
+        (selected[index].position !== selected[index - 1].position + 1 ||
+          range.paragraphIndexes[index] !==
+            range.paragraphIndexes[index - 1] + 1))
     ) {
       return null;
     }
   }
 
-  const firstPosition = positions[0];
-  const lastPosition = positions[positions.length - 1];
-  const first = snapshot.paragraphs[firstPosition];
-  const last = snapshot.paragraphs[lastPosition];
+  const first = selected[0];
+  const last = selected[selected.length - 1];
   if (
-    range.from < first.nodeFrom ||
-    range.from >= first.nodeTo ||
-    range.to <= last.nodeFrom ||
-    range.to > last.nodeTo
+    !first ||
+    !last ||
+    range.from < first.paragraph.nodeFrom ||
+    range.from >= first.paragraph.nodeTo ||
+    range.to <= last.paragraph.nodeFrom ||
+    range.to > last.paragraph.nodeTo
   ) {
     return null;
   }
 
-  return { firstPosition, lastPosition };
+  if (
+    reconstructRangeText(
+      range,
+      selected.map(({ paragraph }) => paragraph),
+    ) !== range.text
+  ) {
+    return null;
+  }
+
+  return { firstPosition: first.position, lastPosition: last.position };
 };
 
 const promptFor = (input: RewriteInput, target: ValidatedTarget) => {

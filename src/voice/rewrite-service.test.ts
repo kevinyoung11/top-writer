@@ -81,6 +81,21 @@ const targetRange = (doc = snapshot()): VoiceRange => {
   };
 };
 
+const crossPartialRange = (doc = snapshot()): VoiceRange => {
+  const first = doc.paragraphs[3];
+  const last = doc.paragraphs[4];
+  const firstOffset = "P03：前缀".length;
+  const lastOffset = "P04：紧邻".length;
+  return {
+    revision: doc.revision,
+    from: first.from + firstOffset,
+    to: last.from + lastOffset,
+    text: `${first.text.slice(firstOffset)}\n\n${last.text.slice(0, lastOffset)}`,
+    paragraphIndexes: [3, 4],
+    block: false,
+  };
+};
+
 const createGenerator = (result: string | Error) => {
   const generate = vi.fn<(request: GenerateTextRequest) => Promise<string>>(
     async () => {
@@ -168,14 +183,7 @@ describe("RewriteService", () => {
 
   it("uses the neighbors outside the first and last paragraph for a cross-block target", async () => {
     const doc = snapshot();
-    const range: VoiceRange = {
-      revision: doc.revision,
-      from: doc.paragraphs[3].from,
-      to: doc.paragraphs[4].to,
-      text: "跨块目标",
-      paragraphIndexes: [3, 4],
-      block: false,
-    };
+    const range = crossPartialRange(doc);
     const generated = createGenerator("跨块改写");
     const service = new RewriteService(generated.service);
 
@@ -185,9 +193,80 @@ describe("RewriteService", () => {
 
     const prompt = firstGeneratedRequest(generated.generate).prompt;
     expect(prompt).toContain(`前文：${JSON.stringify(doc.paragraphs[2].text)}`);
+    expect(prompt).toContain(`目标原文：${JSON.stringify(range.text)}`);
     expect(prompt).toContain(`后文：${JSON.stringify(doc.paragraphs[5].text)}`);
     expect(prompt).not.toContain(doc.paragraphs[1].text);
     expect(prompt).not.toContain(doc.paragraphs[6].text);
+  });
+
+  it("preserves a partial hard-break slice from the snapshot text", async () => {
+    const doc = snapshot();
+    doc.paragraphs[3] = paragraph(3, "P03：前\n缀选中片段后缀。");
+    const target = doc.paragraphs[3];
+    const start = "P03：前".length;
+    const text = "\n缀选中片段";
+    const range: VoiceRange = {
+      revision: doc.revision,
+      from: target.from + start,
+      to: target.from + start + text.length,
+      text,
+      paragraphIndexes: [3],
+      block: false,
+    };
+    const generated = createGenerator("带换行的改写");
+    const service = new RewriteService(generated.service);
+
+    await expect(service.rewrite(requestInput({ doc, range }))).resolves.toBe(
+      "带换行的改写",
+    );
+
+    expect(firstGeneratedRequest(generated.generate).prompt).toContain(
+      `目标原文：${JSON.stringify(text)}`,
+    );
+  });
+
+  it("accepts a full paragraph block only when its snapshot text matches", async () => {
+    const doc = snapshot();
+    const target = doc.paragraphs[3];
+    const range: VoiceRange = {
+      revision: doc.revision,
+      from: target.nodeFrom,
+      to: target.nodeTo,
+      text: target.text,
+      paragraphIndexes: [3],
+      block: true,
+    };
+    const generated = createGenerator("整段改写");
+    const service = new RewriteService(generated.service);
+
+    await expect(service.rewrite(requestInput({ doc, range }))).resolves.toBe(
+      "整段改写",
+    );
+
+    expect(firstGeneratedRequest(generated.generate).prompt).toContain(
+      `目标原文：${JSON.stringify(target.text)}`,
+    );
+  });
+
+  it("rejects forged single and cross-block partial source text before it reaches the generator", async () => {
+    const doc = snapshot();
+    const forgedRanges = [
+      { ...targetRange(doc), text: "PRIVATE-FORGED-SINGLE" },
+      { ...crossPartialRange(doc), text: "PRIVATE-FORGED-CROSS" },
+    ];
+
+    for (const range of forgedRanges) {
+      const generated = createGenerator("should not run");
+      const service = new RewriteService(generated.service);
+
+      await expect(
+        service.rewrite(requestInput({ doc, range })),
+      ).rejects.toMatchObject({
+        name: "RewriteServiceError",
+        code: "invalid-range",
+      });
+      expect(generated.generate).not.toHaveBeenCalled();
+    }
   });
 
   it.each([
