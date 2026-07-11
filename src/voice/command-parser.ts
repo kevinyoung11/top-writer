@@ -1,10 +1,23 @@
 import type { VoiceAction, VoicePlan, VoiceScope } from "./types";
 
 const locatePattern =
-  /(?:找到|找出|定位)(?:一下)?(?:讲|关于)?(.+?)(?:的)?(?:那一段|段落|那段|地方|部分)(?=，|,|然后|再|$)/;
+  /^(?:请\s*)?(?:找到|找出|定位)(?:一下)?(?:讲|关于)?(.+?)(?:的)?(?:那一段|段落|那段|地方|部分)(?=$|[，,；;\s]|然后|再)/;
 
-const controlPattern = /暂停|继续|停止|快一点|慢一点/;
+const locateVerbPattern = /^(?:请\s*)?(?:找到|找出|定位)/;
 const rewritePattern = /改|润色|调整|压缩|精简/;
+const directRewritePattern =
+  /^(?:请\s*)?(?:(?:改写|改得|改成|润色|调整|压缩|精简)|(?:把|将).+(?:改写|改得|改成|改|润色|调整|压缩|精简))/;
+const compoundRewritePattern = /^(?:改写|改得|改成|改|润色|调整|压缩|精简)/;
+const compoundReadPattern =
+  /^(?:朗读|读|念)(?:一下|一遍)?(?=$|[\s，,；;]|然后|再)/;
+const directUndoPattern =
+  /^(?:请\s*)?(?:撤回|恢复刚才(?:的修改)?|回到修改前)(?:一下)?$/;
+const directControlPattern =
+  /^(?:请\s*)?(?:(暂停|继续|停止)(?:朗读|播放)?|(?:朗读|播放)?(快一点|慢一点))(?:一下)?$/;
+const directReadPattern =
+  /^(?:请\s*)?(?:(?:给我\s*)?(?:朗读|读|念)\s*(?:一下\s*)?(?:(?:第[\s\S]*?段)|(?:上一段|前一段|下一段|后一段|当前段|当前一段|这一段|这段|选中(?:的)?(?:内容|文字)?|从头(?:到尾)?|全文|全部))?\s*(?:一下|一遍)?|(?:从头(?:到尾)?|全文|全部)\s*(?:给我\s*)?(?:朗读|读|念)\s*(?:一下|一遍)?)$/;
+const negatedCommandPattern =
+  /^(?:请\s*)?(?:不要|别)\s*(?:找到|找出|定位|撤回|恢复刚才|回到修改前|暂停|继续|停止|快一点|慢一点|朗读|读|念|改写|改得|改成|润色|调整|压缩|精简|改(?=$|\s|一下|这|那|第|选中))/;
 
 const controlValues: Record<string, NonNullable<VoiceAction["control"]>> = {
   暂停: "pause",
@@ -21,13 +34,14 @@ const normalize = (value: string) =>
     .trim();
 
 const readScope = (text: string): VoiceScope | null => {
-  const numbered = text.match(/第\s*([+-]?\s*\d+|负\s*\d+)\s*段/);
+  const numbered = text.match(/第\s*([\s\S]*?)\s*段/);
   if (numbered) {
-    const oneBasedIndex = Number(
-      numbered[1].replace(/\s+/g, "").replace(/^负/, "-"),
-    );
+    const rawIndex = numbered[1].trim();
+    if (!/^\d+$/.test(rawIndex)) return null;
 
-    return oneBasedIndex >= 1
+    const oneBasedIndex = Number(rawIndex);
+
+    return Number.isSafeInteger(oneBasedIndex) && oneBasedIndex >= 1
       ? { kind: "paragraph", index: oneBasedIndex - 1 }
       : null;
   }
@@ -38,6 +52,21 @@ const readScope = (text: string): VoiceScope | null => {
   if (/下一段|后一段/.test(text)) return { kind: "next" };
   return { kind: "current" };
 };
+
+const normalizeSemanticQuery = (value: string) =>
+  value
+    .replace(/[\p{P}\p{S}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const stripActionSeparators = (value: string) =>
+  value.replace(/^(?:(?:[\s，,；;]+)|(?:(?:然后|再)\s*))+/u, "").trim();
+
+const unsupportedPlan = (transcript: string): VoicePlan => ({
+  transcript,
+  confidence: 0,
+  actions: [],
+});
 
 const rewriteConstraint = (text: string): string[] => {
   const rewriteStart = text.search(rewritePattern);
@@ -50,45 +79,63 @@ const rewriteConstraint = (text: string): string[] => {
 export const parseVoicePlan = (rawTranscript: string): VoicePlan => {
   const transcript = normalize(rawTranscript);
   const actions: VoiceAction[] = [];
+
+  if (!transcript || negatedCommandPattern.test(transcript)) {
+    return unsupportedPlan(transcript);
+  }
+
   const locate = transcript.match(locatePattern);
 
   if (locate) {
+    const query = normalizeSemanticQuery(locate[1]);
+    if (!/[\p{L}\p{N}]/u.test(query)) return unsupportedPlan(transcript);
+
     actions.push({
       intent: "locate",
-      scope: { kind: "semantic", query: locate[1].trim() },
+      scope: { kind: "semantic", query },
       constraints: [],
     });
 
-    const remainder = transcript.slice((locate.index ?? 0) + locate[0].length);
-    if (/读|念/.test(remainder)) {
+    let remainder = stripActionSeparators(
+      transcript.slice((locate.index ?? 0) + locate[0].length),
+    );
+    const read = remainder.match(compoundReadPattern);
+    if (read) {
       actions.push({
         intent: "read",
         scope: { kind: "resolved-target" },
         constraints: [],
       });
+      remainder = stripActionSeparators(remainder.slice(read[0].length));
     }
-    if (rewritePattern.test(remainder)) {
+    if (compoundRewritePattern.test(remainder)) {
       actions.push({
         intent: "rewrite",
         scope: { kind: "resolved-target" },
         constraints: rewriteConstraint(remainder),
       });
+      remainder = "";
     }
-  } else if (/撤回|恢复刚才|回到修改前/.test(transcript)) {
+
+    if (remainder) return unsupportedPlan(transcript);
+  } else if (locateVerbPattern.test(transcript)) {
+    return unsupportedPlan(transcript);
+  } else if (directUndoPattern.test(transcript)) {
     actions.push({ intent: "undo", scope: null, constraints: [] });
   } else {
-    const control = transcript.match(controlPattern);
+    const control = transcript.match(directControlPattern);
     if (control) {
+      const value = control[1] ?? control[2];
       actions.push({
         intent: "control",
         scope: null,
         constraints: [],
-        control: controlValues[control[0]],
+        control: controlValues[value],
       });
-    } else if (/读|念/.test(transcript)) {
+    } else if (directReadPattern.test(transcript)) {
       const scope = readScope(transcript);
       if (scope) actions.push({ intent: "read", scope, constraints: [] });
-    } else if (rewritePattern.test(transcript)) {
+    } else if (directRewritePattern.test(transcript)) {
       actions.push({
         intent: "rewrite",
         scope: /选中/.test(transcript)

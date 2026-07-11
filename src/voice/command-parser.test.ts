@@ -126,4 +126,119 @@ describe("parseVoicePlan", () => {
       confidence: 1,
     });
   });
+
+  it.each(["不要撤回", "不要停止", "读者信任很重要"])(
+    "does not treat keyword text as a command: %s",
+    (transcript) => {
+      expect(parseVoicePlan(transcript)).toMatchObject({
+        confidence: 0,
+        actions: [],
+      });
+    },
+  );
+
+  it("treats a quoted control keyword inside an edit request as rewrite text", () => {
+    expect(parseVoicePlan("把“继续”改成“接着”").actions).toEqual([
+      {
+        intent: "rewrite",
+        scope: { kind: "effective" },
+        constraints: ["把“继续”改成“接着”"],
+      },
+    ]);
+  });
+
+  it.each(["改革开放很重要", "产品正在改进"])(
+    "does not treat an ordinary word containing 改 as a rewrite: %s",
+    (transcript) => {
+      expect(parseVoicePlan(transcript)).toMatchObject({
+        confidence: 0,
+        actions: [],
+      });
+    },
+  );
+
+  it("allows a rewrite request to quote a locate keyword", () => {
+    expect(parseVoicePlan("把“找到”改成“发现”").actions).toEqual([
+      {
+        intent: "rewrite",
+        scope: { kind: "effective" },
+        constraints: ["把“找到”改成“发现”"],
+      },
+    ]);
+  });
+
+  it.each(["请不要改写这段", "请别润色这段"])(
+    "rejects the polite negated command %s",
+    (transcript) => {
+      expect(parseVoicePlan(transcript)).toMatchObject({
+        confidence: 0,
+        actions: [],
+      });
+    },
+  );
+
+  it.each([
+    "找到讲用户信任的那段；读一下",
+    "找到讲用户信任的那段 读一下",
+    "找到讲用户信任的那段 然后 读一下",
+  ])("accepts a safe locate-read separator in %s", (transcript) => {
+    const plan = parseVoicePlan(transcript);
+
+    expect(plan.actions.map((action) => action.intent)).toEqual([
+      "locate",
+      "read",
+    ]);
+    expect(plan.actions[0].scope).toEqual({
+      kind: "semantic",
+      query: "用户信任",
+    });
+  });
+
+  it("strips punctuation around a meaningful semantic query", () => {
+    expect(parseVoicePlan("找到讲“用户信任”的那段").actions[0]).toMatchObject({
+      intent: "locate",
+      scope: { kind: "semantic", query: "用户信任" },
+    });
+  });
+
+  it.each(["找到讲，的那段", "找到讲用户信任的那段；随便读者"])(
+    "rejects a malformed locate command without falling through: %s",
+    (transcript) => {
+      expect(parseVoicePlan(transcript)).toMatchObject({
+        confidence: 0,
+        actions: [],
+      });
+    },
+  );
+
+  it.each([
+    "读第零段",
+    "读第1.5段",
+    "读第段",
+    "读第 +1 段",
+    "读第9007199254740992段",
+  ])("rejects unsupported paragraph expression in %s", (transcript) => {
+    expect(parseVoicePlan(transcript)).toMatchObject({
+      confidence: 0,
+      actions: [],
+    });
+  });
+
+  it.each([
+    ["停止朗读", "stop"],
+    ["继续朗读", "resume"],
+  ] as const)("keeps the natural direct control %s", (transcript, control) => {
+    expect(parseVoicePlan(transcript).actions).toEqual([
+      { intent: "control", scope: null, constraints: [], control },
+    ]);
+  });
+
+  it.each([
+    ["给我念前一段", { kind: "previous" }],
+    ["朗读上一段", { kind: "previous" }],
+  ])("keeps the natural direct read %s", (transcript, scope) => {
+    expect(parseVoicePlan(transcript).actions).toEqual([
+      { intent: "read", scope, constraints: [] },
+    ]);
+  });
 });
