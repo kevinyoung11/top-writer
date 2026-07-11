@@ -1,3 +1,7 @@
+// @vitest-environment jsdom
+
+import { Editor } from "@tiptap/core";
+import StarterKit from "@tiptap/starter-kit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceRange } from "../types";
 import type { SpeechChunk, SynthesisOptions } from "./types";
@@ -281,6 +285,152 @@ describe("splitRangeIntoSpeechChunks", () => {
       range: { from: 20, to: 25, text: "  开始。" },
     });
   });
+
+  it("keeps consecutive endings and closing quotes or brackets together", () => {
+    const chunks = splitRangeIntoSpeechChunks(
+      makeRange('你好？！下一句。”然后呢?!)最后!"'),
+    );
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      "你好？！",
+      "下一句。”",
+      "然后呢?!)",
+      '最后!"',
+    ]);
+  });
+
+  it("bounds oversized text, prefers whitespace, and never splits a surrogate pair", () => {
+    const text = `${"a".repeat(239)}😀${"b".repeat(4759)}`;
+    expect(text.length).toBe(5000);
+    const range = makeRange(text, 30);
+    const chunks = splitRangeIntoSpeechChunks(range);
+
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(text);
+    let nextFrom = range.from;
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(240);
+      expect(chunk.range.from).toBe(nextFrom);
+      expect(chunk.range.to - chunk.range.from).toBe(chunk.text.length);
+      expect(chunk.text.charCodeAt(0)).not.toBeGreaterThanOrEqual(0xdc00);
+      const lastCodeUnit = chunk.text.charCodeAt(chunk.text.length - 1);
+      expect(lastCodeUnit < 0xd800 || lastCodeUnit > 0xdbff).toBe(true);
+      nextFrom = chunk.range.to;
+    }
+    expect(nextFrom).toBe(range.to);
+
+    const whitespaceRange = makeRange(
+      `${"x".repeat(230)} ${"y".repeat(30)}`,
+      100,
+    );
+    const whitespaceChunks = splitRangeIntoSpeechChunks(whitespaceRange);
+    expect(whitespaceChunks[0].text).toBe(`${"x".repeat(230)} `);
+    expect(whitespaceChunks.map((chunk) => chunk.text).join("")).toBe(
+      whitespaceRange.text,
+    );
+
+    const longWhitespaceRange = makeRange(
+      `${" ".repeat(300)}内容${" ".repeat(300)}结尾`,
+      200,
+    );
+    const longWhitespaceChunks =
+      splitRangeIntoSpeechChunks(longWhitespaceRange);
+    expect(longWhitespaceChunks.map((chunk) => chunk.text).join("")).toBe(
+      longWhitespaceRange.text,
+    );
+    expect(
+      longWhitespaceChunks.every((chunk) => chunk.text.length <= 240),
+    ).toBe(true);
+  });
+
+  it("maps every real Tiptap paragraph-content chunk back to identical text", () => {
+    const editor = new Editor({
+      element: document.createElement("div"),
+      extensions: [StarterKit],
+      content:
+        "<p>普通第一句。普通第二句！</p><p>换行前<br>换行后？</p><ul><li><p>嵌套第一句；嵌套第二句。</p></li></ul>",
+    });
+
+    try {
+      const ranges: VoiceRange[] = [];
+      editor.state.doc.descendants((node, position) => {
+        if (node.type.name !== "paragraph") return;
+        const from = position + 1;
+        const to = from + node.content.size;
+        ranges.push({
+          revision: 3,
+          from,
+          to,
+          text: editor.state.doc.textBetween(from, to, "\n\n", "\n"),
+          paragraphIndexes: [ranges.length],
+          block: true,
+        });
+      });
+
+      expect(ranges).toHaveLength(3);
+      for (const range of ranges) {
+        const chunks = splitRangeIntoSpeechChunks(range);
+        expect(chunks.map((chunk) => chunk.text).join("")).toBe(range.text);
+        for (const chunk of chunks) {
+          expect(
+            editor.state.doc.textBetween(
+              chunk.range.from,
+              chunk.range.to,
+              "\n\n",
+              "\n",
+            ),
+          ).toBe(chunk.text);
+        }
+      }
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it("rejects node/document coordinates that are not content-aligned", () => {
+    const editor = new Editor({
+      element: document.createElement("div"),
+      extensions: [StarterKit],
+      content: "<p>第一段。</p><p>第二段。</p>",
+    });
+
+    try {
+      const paragraph = editor.state.doc.firstChild;
+      if (!paragraph) throw new Error("Expected paragraph");
+      const invalidRanges: VoiceRange[] = [
+        {
+          revision: 0,
+          from: 0,
+          to: paragraph.nodeSize,
+          text: paragraph.textContent,
+          paragraphIndexes: [0],
+          block: true,
+        },
+        {
+          revision: 0,
+          from: 0,
+          to: editor.state.doc.content.size,
+          text: editor.state.doc.textBetween(
+            0,
+            editor.state.doc.content.size,
+            "\n\n",
+            "\n",
+          ),
+          paragraphIndexes: [0, 1],
+          block: true,
+        },
+      ];
+
+      for (const range of invalidRanges) {
+        expect(() => splitRangeIntoSpeechChunks(range)).toThrowError(
+          new RangeError(
+            "VoiceRange must use paragraph content coordinates; decompose block/document ranges into paragraph content ranges",
+          ),
+        );
+      }
+    } finally {
+      editor.destroy();
+    }
+  });
 });
 
 describe("BrowserSpeechSynthesizer", () => {
@@ -443,6 +593,130 @@ describe("BrowserSpeechSynthesizer", () => {
     await second;
   });
 
+  it("does not orphan a reentrant replacement started by the cancelled session", async () => {
+    const { speechSynthesis, synthesizer } = createHarness([
+      voice("mandarin", "zh-CN"),
+    ]);
+    const settlements = { old: 0, nested: 0, outer: 0 };
+    let nestedPlayback: Promise<void> | null = null;
+    const nestedOptions = makeOptions();
+    const oldOptions = makeOptions();
+    oldOptions.onError = vi.fn((code) => {
+      if (code !== "cancelled") return;
+      nestedPlayback = synthesizer.speak(
+        [makeChunk("嵌套调用")],
+        nestedOptions,
+      );
+      void nestedPlayback.then(
+        () => {
+          settlements.nested += 1;
+        },
+        () => {
+          settlements.nested += 1;
+        },
+      );
+    });
+    const oldPlayback = synthesizer.speak([makeChunk("旧队列")], oldOptions);
+    const oldOutcome = oldPlayback.then(
+      () => {
+        settlements.old += 1;
+        return null;
+      },
+      (error: unknown) => {
+        settlements.old += 1;
+        return error;
+      },
+    );
+    await flushMicrotasks();
+
+    const outerOptions = makeOptions();
+    const outerPlayback = synthesizer.speak(
+      [makeChunk("外层替换")],
+      outerOptions,
+    );
+    const outerOutcome = outerPlayback.then(
+      () => {
+        settlements.outer += 1;
+        return null;
+      },
+      (error: unknown) => {
+        settlements.outer += 1;
+        return error;
+      },
+    );
+    await flushMicrotasks();
+
+    expect(speechSynthesis.spoken.map((utterance) => utterance.text)).toEqual([
+      "旧队列",
+      "嵌套调用",
+    ]);
+    expect(await oldOutcome).toBeInstanceOf(SpeechCancelledError);
+    expect(await outerOutcome).toBeInstanceOf(SpeechCancelledError);
+    expect(settlements).toEqual({ old: 1, nested: 0, outer: 1 });
+    expect(oldOptions.onError).toHaveBeenCalledOnce();
+    expect(outerOptions.onError).toHaveBeenCalledOnce();
+
+    if (!nestedPlayback) throw new Error("Expected nested playback");
+    speechSynthesis.spoken.at(-1)?.emitEnd();
+    await nestedPlayback;
+    expect(settlements).toEqual({ old: 1, nested: 1, outer: 1 });
+  });
+
+  it("snapshots chunks, settings, and callback references before cancellation callbacks", async () => {
+    const originalVoice = voice("original", "en-US");
+    const mutatedVoice = voice("mutated", "zh-CN");
+    const { synthesizer } = createHarness([mutatedVoice, originalVoice]);
+    const originalStart = vi.fn<SynthesisOptions["onChunkStart"]>();
+    const mutatedStart = vi.fn<SynthesisOptions["onChunkStart"]>();
+    const originalError = vi.fn<SynthesisOptions["onError"]>();
+    const mutatedError = vi.fn<SynthesisOptions["onError"]>();
+    const outerOptions: SynthesisOptions = {
+      language: "en-US",
+      rate: 1.75,
+      voiceURI: "original",
+      onChunkStart: originalStart,
+      onError: originalError,
+    };
+    const outerChunk = makeChunk("原始内容");
+    const oldOptions = makeOptions();
+    oldOptions.onError = vi.fn((code) => {
+      if (code !== "cancelled") return;
+      outerChunk.text = "篡改内容";
+      outerChunk.range.text = "篡改内容";
+      outerChunk.range.to =
+        outerChunk.range.from + outerChunk.range.text.length;
+      outerOptions.language = "zh-CN";
+      outerOptions.rate = 0.5;
+      outerOptions.voiceURI = "mutated";
+      outerOptions.onChunkStart = mutatedStart;
+      outerOptions.onError = mutatedError;
+    });
+    const oldPlayback = synthesizer.speak([makeChunk("旧内容")], oldOptions);
+    const oldRejection = oldPlayback.catch((error: unknown) => error);
+    await flushMicrotasks();
+
+    const outerPlayback = synthesizer.speak([outerChunk], outerOptions);
+    await flushMicrotasks();
+    const utterance = FakeUtterance.instances.at(-1);
+
+    expect(await oldRejection).toBeInstanceOf(SpeechCancelledError);
+    expect(utterance).toMatchObject({
+      text: "原始内容",
+      lang: "en-US",
+      rate: 1.75,
+      voice: originalVoice,
+    });
+    expect(originalStart).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "原始内容" }),
+    );
+    expect(mutatedStart).not.toHaveBeenCalled();
+
+    utterance?.emitEnd();
+    await outerPlayback;
+    expect(originalError).not.toHaveBeenCalled();
+    expect(mutatedError).not.toHaveBeenCalled();
+  });
+
   it("resolves an empty queue without touching native playback", async () => {
     const { speechSynthesis, synthesizer } = createHarness();
     const options = makeOptions();
@@ -565,6 +839,36 @@ describe("BrowserSpeechSynthesizer", () => {
     FakeUtterance.instances[0].emitEnd();
     await playback;
   });
+
+  it.each([
+    {
+      language: "en-US",
+      voices: [
+        voice("chinese", "zh-CN"),
+        voice("english-base", "en-GB"),
+        voice("english-exact", "en-US"),
+      ],
+      expected: "english-exact",
+    },
+    {
+      language: "en-AU",
+      voices: [voice("chinese", "zh-CN"), voice("english-base", "en-GB")],
+      expected: "english-base",
+    },
+  ])(
+    "selects $language by exact locale then base language",
+    async ({ language, voices, expected }) => {
+      const { synthesizer } = createHarness(voices);
+      const options = { ...makeOptions(), language };
+      const playback = synthesizer.speak([makeChunk("language")], options);
+      await flushMicrotasks();
+
+      expect(FakeUtterance.instances[0].voice?.voiceURI).toBe(expected);
+
+      FakeUtterance.instances[0].emitEnd();
+      await playback;
+    },
+  );
 
   it("reports unsupported playback deterministically without browser audio", async () => {
     const synthesizer = new BrowserSpeechSynthesizer({});

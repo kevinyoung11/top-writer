@@ -2,7 +2,26 @@ import type { VoiceRange } from "../types";
 import type { SpeechChunk, SpeechSynthesizer, SynthesisOptions } from "./types";
 
 const SENTENCE_ENDINGS = new Set(["。", "！", "？", "!", "?", "；", ";"]);
+const SENTENCE_CLOSERS = new Set([
+  "”",
+  "’",
+  '"',
+  "'",
+  "）",
+  ")",
+  "】",
+  "]",
+  "》",
+  "〉",
+  "」",
+  "』",
+  "〕",
+  "}",
+]);
+const MAX_SPEECH_CHUNK_LENGTH = 240;
 const VOICE_WAIT_TIMEOUT_MS = 1000;
+const INVALID_RANGE_MESSAGE =
+  "VoiceRange must use paragraph content coordinates; decompose block/document ranges into paragraph content ranges";
 
 type UtteranceConstructor = new (text?: string) => SpeechSynthesisUtterance;
 
@@ -49,6 +68,14 @@ const cloneChunk = (chunk: SpeechChunk): SpeechChunk => ({
   },
 });
 
+const snapshotOptions = (options: SynthesisOptions): SynthesisOptions => ({
+  language: options.language,
+  rate: options.rate,
+  voiceURI: options.voiceURI,
+  onChunkStart: options.onChunkStart,
+  onError: options.onError,
+});
+
 const createChunk = (
   source: VoiceRange,
   start: number,
@@ -67,23 +94,94 @@ const createChunk = (
   };
 };
 
+const validateContentRange = (range: VoiceRange): void => {
+  if (
+    !Number.isSafeInteger(range.from) ||
+    !Number.isSafeInteger(range.to) ||
+    range.from < 0 ||
+    range.to < range.from ||
+    range.to - range.from !== range.text.length
+  ) {
+    throw new RangeError(INVALID_RANGE_MESSAGE);
+  }
+};
+
+const safeHardLimit = (text: string, start: number, end: number): number => {
+  let limit = Math.min(start + MAX_SPEECH_CHUNK_LENGTH, end);
+  if (limit >= end) return limit;
+
+  const previous = text.charCodeAt(limit - 1);
+  const next = text.charCodeAt(limit);
+  if (
+    previous >= 0xd800 &&
+    previous <= 0xdbff &&
+    next >= 0xdc00 &&
+    next <= 0xdfff
+  ) {
+    limit -= 1;
+  }
+  return limit;
+};
+
+const preferredBreak = (text: string, start: number, limit: number): number => {
+  for (let index = limit - 1; index >= start; index -= 1) {
+    if (/\s/u.test(text[index])) return index + 1;
+  }
+  return limit;
+};
+
+const appendBoundedChunks = (
+  range: VoiceRange,
+  chunks: SpeechChunk[],
+  segmentStart: number,
+  segmentEnd: number,
+): void => {
+  if (!range.text.slice(segmentStart, segmentEnd).trim()) return;
+
+  let start = segmentStart;
+  while (segmentEnd - start > MAX_SPEECH_CHUNK_LENGTH) {
+    const limit = safeHardLimit(range.text, start, segmentEnd);
+    const end = preferredBreak(range.text, start, limit);
+    chunks.push(createChunk(range, start, end));
+    start = end;
+  }
+
+  if (start < segmentEnd) {
+    chunks.push(createChunk(range, start, segmentEnd));
+  }
+};
+
 export const splitRangeIntoSpeechChunks = (
   range: VoiceRange,
 ): SpeechChunk[] => {
+  validateContentRange(range);
   const chunks: SpeechChunk[] = [];
   let start = 0;
 
-  for (let index = 0; index < range.text.length; index += 1) {
-    if (!SENTENCE_ENDINGS.has(range.text[index])) continue;
+  while (start < range.text.length) {
+    let ending = start;
+    while (
+      ending < range.text.length &&
+      !SENTENCE_ENDINGS.has(range.text[ending])
+    ) {
+      ending += 1;
+    }
 
-    const chunk = createChunk(range, start, index + 1);
-    if (chunk.text.trim()) chunks.push(chunk);
-    start = index + 1;
-  }
+    if (ending === range.text.length) {
+      appendBoundedChunks(range, chunks, start, ending);
+      break;
+    }
 
-  if (start < range.text.length) {
-    const chunk = createChunk(range, start, range.text.length);
-    if (chunk.text.trim()) chunks.push(chunk);
+    let end = ending + 1;
+    while (end < range.text.length && SENTENCE_ENDINGS.has(range.text[end])) {
+      end += 1;
+    }
+    while (end < range.text.length && SENTENCE_CLOSERS.has(range.text[end])) {
+      end += 1;
+    }
+
+    appendBoundedChunks(range, chunks, start, end);
+    start = end;
   }
 
   return chunks;
@@ -136,6 +234,7 @@ export class BrowserSpeechSynthesizer implements SpeechSynthesizer {
   private readonly setTimer: (callback: () => void, delay: number) => unknown;
   private readonly clearTimer: (handle: unknown) => void;
   private generation = 0;
+  private speakInvocation = 0;
   private active: PlaybackSession | null = null;
 
   constructor(runtime: BrowserSpeechSynthesisRuntime = readDefaultRuntime()) {
@@ -155,16 +254,23 @@ export class BrowserSpeechSynthesizer implements SpeechSynthesizer {
   }
 
   speak(chunks: SpeechChunk[], options: SynthesisOptions): Promise<void> {
-    this.cancel();
-
+    const invocation = ++this.speakInvocation;
     const playableChunks = chunks
       .filter((chunk) => chunk.text.trim().length > 0)
       .map(cloneChunk);
+    const optionsSnapshot = snapshotOptions(options);
+
+    this.cancel();
+    if (invocation !== this.speakInvocation) {
+      invoke(() => optionsSnapshot.onError("cancelled"));
+      return Promise.reject(new SpeechCancelledError());
+    }
+
     if (playableChunks.length === 0) return Promise.resolve();
 
     if (!this.supported) {
       const error = createUnsupportedError();
-      invoke(() => options.onError("synthesis-failed"));
+      invoke(() => optionsSnapshot.onError("synthesis-failed"));
       return Promise.reject(error);
     }
 
@@ -173,7 +279,7 @@ export class BrowserSpeechSynthesizer implements SpeechSynthesizer {
       const session: PlaybackSession = {
         generation,
         chunks: playableChunks,
-        options,
+        options: optionsSnapshot,
         utterances: [],
         currentIndex: -1,
         settled: false,
@@ -232,7 +338,11 @@ export class BrowserSpeechSynthesizer implements SpeechSynthesizer {
     if (!this.current(session) || !this.Utterance) return;
 
     try {
-      const selectedVoice = this.selectVoice(voices, session.options.voiceURI);
+      const selectedVoice = this.selectVoice(
+        voices,
+        session.options.voiceURI,
+        session.options.language,
+      );
       session.utterances = session.chunks.map((chunk, index) => {
         const utterance = new this.Utterance!(chunk.text);
         utterance.lang = session.options.language;
@@ -323,19 +433,32 @@ export class BrowserSpeechSynthesizer implements SpeechSynthesizer {
   private selectVoice(
     voices: SpeechSynthesisVoice[],
     requestedURI: string | null,
+    language: string,
   ): SpeechSynthesisVoice | null {
     if (requestedURI) {
       const requested = voices.find((voice) => voice.voiceURI === requestedURI);
       if (requested) return requested;
     }
 
-    return (
-      voices.find((voice) => voice.lang.toLowerCase() === "zh-cn") ??
-      voices.find((voice) => voice.lang.toLowerCase().startsWith("zh-")) ??
-      voices.find((voice) => voice.default) ??
-      voices[0] ??
-      null
-    );
+    const locale = language.trim().replace(/_/g, "-").toLowerCase();
+    if (locale) {
+      const exactLocale = voices.find(
+        (voice) => voice.lang.toLowerCase() === locale,
+      );
+      if (exactLocale) return exactLocale;
+
+      const baseLanguage = locale.split("-")[0];
+      const baseLocale = voices.find((voice) => {
+        const voiceLanguage = voice.lang.toLowerCase().replace(/_/g, "-");
+        return (
+          voiceLanguage === baseLanguage ||
+          voiceLanguage.startsWith(`${baseLanguage}-`)
+        );
+      });
+      if (baseLocale) return baseLocale;
+    }
+
+    return voices.find((voice) => voice.default) ?? voices[0] ?? null;
   }
 
   private play(session: PlaybackSession, index: number): void {
