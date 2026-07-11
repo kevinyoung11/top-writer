@@ -2,6 +2,7 @@ import type { EditorSnapshot } from "../voice/types";
 import type {
   AgentEditOperation,
   AgentEditOperationType,
+  AgentEditHashResult,
   AgentEditProtocolError,
   AgentEditProtocolErrorCode,
   AgentEditValidationResult,
@@ -38,6 +39,11 @@ const failure = (
 ): AgentEditValidationResult => ({
   ok: false,
   error: { code, ...(operationId === undefined ? {} : { operationId }) },
+});
+
+const hashUnavailable = (): AgentEditHashResult => ({
+  ok: false,
+  error: { code: "hash-unavailable" },
 });
 
 const isRecord = (value: unknown): value is UnknownRecord =>
@@ -157,10 +163,10 @@ const textForRange = (
 ): string | null => {
   const paragraphs = snapshot.paragraphs;
   const firstIndex = paragraphs.findIndex(
-    (paragraph) => from >= paragraph.from && from < paragraph.to,
+    (paragraph) => from >= paragraph.nodeFrom && from < paragraph.nodeTo,
   );
   const lastIndex = paragraphs.findIndex(
-    (paragraph) => to > paragraph.from && to <= paragraph.to,
+    (paragraph) => to > paragraph.nodeFrom && to <= paragraph.nodeTo,
   );
 
   if (firstIndex < 0 || lastIndex < firstIndex) return null;
@@ -169,16 +175,21 @@ const textForRange = (
   for (let index = firstIndex; index <= lastIndex; index += 1) {
     const paragraph = paragraphs[index];
     if (
+      !Number.isSafeInteger(paragraph.nodeFrom) ||
+      !Number.isSafeInteger(paragraph.nodeTo) ||
       !Number.isSafeInteger(paragraph.from) ||
       !Number.isSafeInteger(paragraph.to)
     ) {
       return null;
     }
 
-    const startsAt = index === firstIndex ? from - paragraph.from : 0;
+    const startsAt =
+      index === firstIndex ? Math.max(0, from - paragraph.from) : 0;
     const endsAt =
-      index === lastIndex ? to - paragraph.from : paragraph.text.length;
-    if (startsAt < 0 || endsAt > paragraph.text.length || startsAt >= endsAt) {
+      index === lastIndex
+        ? Math.min(paragraph.text.length, to - paragraph.from)
+        : paragraph.text.length;
+    if (startsAt > endsAt || endsAt > paragraph.text.length) {
       return null;
     }
     if (index > firstIndex) {
@@ -191,21 +202,46 @@ const textForRange = (
   return text;
 };
 
-export const hashOriginalText = async (text: string): Promise<string> => {
-  const digest = await globalThis.crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text),
-  );
-  return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
+export const hashOriginalText = async (
+  text: string,
+): Promise<AgentEditHashResult> => {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return hashUnavailable();
+
+  try {
+    const digest = await subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(text),
+    );
+    return {
+      ok: true,
+      hash: Array.from(new Uint8Array(digest), (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      ).join(""),
+    };
+  } catch {
+    return hashUnavailable();
+  }
 };
+
+const rangesOverlap = (first: AgentEditOperation, second: AgentEditOperation) =>
+  first.from < second.to && second.from < first.to;
+
+const rangesConflict = (
+  first: AgentEditOperation,
+  second: AgentEditOperation,
+) =>
+  rangesOverlap(first, second) ||
+  (first.type === "insertAfterRange" &&
+    second.type === "insertAfterRange" &&
+    first.to === second.to);
 
 export const validateAgentEditOperations = async (
   operations: readonly AgentEditOperation[],
   snapshot: EditorSnapshot,
 ): Promise<AgentEditValidationResult> => {
   const ids = new Set<string>();
+  const validated: AgentEditOperation[] = [];
   for (const operation of operations) {
     if (ids.has(operation.id)) return failure("duplicate-id", operation.id);
     ids.add(operation.id);
@@ -216,9 +252,16 @@ export const validateAgentEditOperations = async (
 
     const originalText = textForRange(snapshot, operation.from, operation.to);
     if (originalText === null) return failure("invalid-range", operation.id);
-    if ((await hashOriginalText(originalText)) !== operation.originalTextHash) {
+    const hash = await hashOriginalText(originalText);
+    if (!hash.ok) return hash;
+    if (hash.hash !== operation.originalTextHash) {
       return failure("hash-mismatch", operation.id);
     }
+
+    if (validated.some((existing) => rangesConflict(existing, operation))) {
+      return failure("invalid-overlap", operation.id);
+    }
+    validated.push(operation);
   }
 
   return success([...operations]);

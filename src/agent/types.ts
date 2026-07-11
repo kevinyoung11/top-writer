@@ -37,15 +37,20 @@ export type AgentEditProtocolErrorCode =
   | "invalid-operation"
   | "unknown-field"
   | "duplicate-id"
+  | "invalid-overlap"
   | "revision-mismatch"
   | "invalid-range"
   | "hash-mismatch"
+  | "hash-unavailable"
   | "invalid-replacement";
 
 export interface AgentEditProtocolError {
   code: AgentEditProtocolErrorCode;
   operationId?: string;
 }
+
+export type AgentEditHashResult =
+  { ok: true; hash: string } | { ok: false; error: AgentEditProtocolError };
 
 export type AgentEditValidationResult =
   | { ok: true; operations: AgentEditOperation[] }
