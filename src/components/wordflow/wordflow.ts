@@ -206,6 +206,8 @@ export class WordflowWordflow extends LitElement {
   private readonly voicePreferences = new VoicePreferencesStore();
   private voicePlayerResizeObserver: ResizeObserver | null = null;
   private observedVoicePlayer: HTMLElement | null = null;
+  private agentReviewResizeObserver: ResizeObserver | null = null;
+  private observedAgentReview: HTMLElement | null = null;
 
   // ===== Lifecycle Methods ======
   constructor() {
@@ -293,29 +295,55 @@ export class WordflowWordflow extends LitElement {
     const player = this.shadowRoot?.querySelector<HTMLElement>(
       'top-writer-voice-player'
     ) ?? null;
-    if (player === this.observedVoicePlayer) return;
+    if (player !== this.observedVoicePlayer) {
+      this.voicePlayerResizeObserver?.disconnect();
+      this.voicePlayerResizeObserver = null;
+      this.observedVoicePlayer = player;
+      this.observeLayoutHeight(
+        player,
+        '--voice-player-height',
+        observer => (this.voicePlayerResizeObserver = observer)
+      );
+    }
 
-    this.voicePlayerResizeObserver?.disconnect();
-    this.voicePlayerResizeObserver = null;
-    this.observedVoicePlayer = player;
+    const review = this.shadowRoot?.querySelector<HTMLElement>(
+      'top-writer-agent-review-bar'
+    ) ?? null;
+    if (review !== this.observedAgentReview) {
+      this.agentReviewResizeObserver?.disconnect();
+      this.agentReviewResizeObserver = null;
+      this.observedAgentReview = review;
+      this.observeLayoutHeight(
+        review,
+        '--agent-review-height',
+        observer => (this.agentReviewResizeObserver = observer)
+      );
+    }
+  }
 
-    if (!player || typeof ResizeObserver === 'undefined') return;
-    this.voicePlayerResizeObserver = new ResizeObserver(entries => {
+  private observeLayoutHeight(
+    element: HTMLElement | null,
+    variable: '--voice-player-height' | '--agent-review-height',
+    setObserver: (observer: ResizeObserver) => void
+  ) {
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(entries => {
       const height = entries[0]?.contentRect.height;
       if (typeof height === 'number') {
-        this.workflowElement?.style.setProperty(
-          '--voice-player-height',
-          `${height}px`
-        );
+        this.workflowElement?.style.setProperty(variable, `${height}px`);
       }
     });
-    this.voicePlayerResizeObserver.observe(player);
+    setObserver(observer);
+    observer.observe(element);
   }
 
   disconnectedCallback() {
     this.voicePlayerResizeObserver?.disconnect();
     this.voicePlayerResizeObserver = null;
     this.observedVoicePlayer = null;
+    this.agentReviewResizeObserver?.disconnect();
+    this.agentReviewResizeObserver = null;
+    this.observedAgentReview = null;
     this.voiceController?.destroy();
     this.voiceController = null;
     this.agentController?.removeEventListener(
