@@ -11,6 +11,7 @@ import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { WordflowTextEditor } from '../text-editor/text-editor';
 import { v4 as uuidv4, validate } from 'uuid';
 import { config } from '../../config/config';
+import { PRODUCT_NAME } from '../../config/brand';
 import { PromptManager } from './prompt-manager';
 import { RemotePromptManager } from './remote-prompt-manager';
 import { UserConfigManager, UserConfig } from './user-config';
@@ -519,7 +520,7 @@ export class WordflowWordflow extends LitElement {
               target="_blank"
             >
               <span class="svg-icon">${unsafeHTML(logoIcon)}</span>
-              <span class="name">Wordflow</span>
+              <span class="name">${PRODUCT_NAME}</span>
             </a>
           </div>
         </div>
