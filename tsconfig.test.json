@@ -3,6 +3,6 @@
   "compilerOptions": {
     "types": ["@webgpu/types", "dom-speech-recognition", "node", "vitest/globals"]
   },
-  "include": ["src/**/*.test.ts", "src/test/**/*.ts", "test/**/*.ts"],
+  "include": ["src/vite-env.d.ts", "src/**/*.test.ts", "src/test/**/*.ts", "test/**/*.ts"],
   "exclude": []
 }
