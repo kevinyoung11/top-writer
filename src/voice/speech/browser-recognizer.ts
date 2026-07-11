@@ -104,6 +104,7 @@ export class BrowserSpeechRecognizer implements SpeechRecognizer {
       this.attach(session);
       engine.start();
     } catch {
+      if (!this.current(session)) return;
       this.finish(session);
       invoke(() => handlers.onError("unknown"));
     }
@@ -117,6 +118,7 @@ export class BrowserSpeechRecognizer implements SpeechRecognizer {
     try {
       session.engine.stop();
     } catch {
+      if (!this.current(session)) return;
       const handlers = session.handlers;
       this.finish(session);
       invoke(() => handlers.onError("unknown"));
@@ -191,6 +193,7 @@ export class BrowserSpeechRecognizer implements SpeechRecognizer {
 
     if (finalized.length > 0) {
       invoke(() => session.handlers.onFinal(finalized.join("")));
+      if (!this.current(session)) return;
     }
 
     const partial = [...session.interimByIndex.entries()]

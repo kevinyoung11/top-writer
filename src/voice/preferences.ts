@@ -11,13 +11,22 @@ export interface VoicePreferences {
   privacyNoticeAccepted: boolean;
 }
 
-export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
+const createDefaults = (): VoicePreferences => ({
   language: "zh-CN",
   rate: 1,
   voiceURI: null,
   vocabulary: [],
   privacyNoticeAccepted: false,
+});
+
+const deepFreezePreferences = (value: VoicePreferences): VoicePreferences => {
+  for (const entry of value.vocabulary) Object.freeze(entry);
+  Object.freeze(value.vocabulary);
+  return Object.freeze(value);
 };
+
+export const DEFAULT_VOICE_PREFERENCES: VoicePreferences =
+  deepFreezePreferences(createDefaults());
 
 type VoicePreferencesStorage = Pick<
   Storage,
@@ -31,7 +40,7 @@ const clonePreferences = (value: VoicePreferences): VoicePreferences => ({
   vocabulary: value.vocabulary.map((entry) => ({ ...entry })),
 });
 
-const createDefaults = () => clonePreferences(DEFAULT_VOICE_PREFERENCES);
+type PersistedRecordState = "unknown" | "absent" | "present";
 
 const clampRate = (value: number) => Math.min(2, Math.max(0.5, value));
 
@@ -128,7 +137,8 @@ export class VoicePreferencesStore extends EventTarget {
   private readonly injectedStorage: VoicePreferencesStorage | null | undefined;
   private resolvedStorage: VoicePreferencesStorage | null | undefined;
   private preferences: VoicePreferences | null = null;
-  private persistedRecordPresent = false;
+  private persistedRecordState: PersistedRecordState = "unknown";
+  private persistenceDirty = false;
 
   constructor(storage?: VoicePreferencesStorage | null) {
     super();
@@ -200,13 +210,17 @@ export class VoicePreferencesStore extends EventTarget {
     if (this.preferences) return this.preferences;
 
     let persisted: string | null = null;
-    try {
-      persisted = this.storage()?.getItem(STORAGE_KEY) ?? null;
-    } catch {
-      persisted = null;
+    const storage = this.storage();
+    if (storage) {
+      try {
+        persisted = storage.getItem(STORAGE_KEY);
+        this.persistedRecordState = persisted === null ? "absent" : "present";
+      } catch {
+        this.persistedRecordState = "unknown";
+      }
+    } else {
+      this.persistedRecordState = "absent";
     }
-
-    if (persisted !== null) this.persistedRecordPresent = true;
 
     if (persisted === null) {
       this.preferences = createDefaults();
@@ -225,30 +239,17 @@ export class VoicePreferencesStore extends EventTarget {
     const current = this.ensureLoaded();
     const valueChanged = !preferencesEqual(current, next);
 
-    if (valueChanged) this.preferences = clonePreferences(next);
+    if (valueChanged) {
+      this.preferences = clonePreferences(next);
+      this.persistenceDirty = true;
+    }
 
     if (persistence === "remove") {
-      if (this.persistedRecordPresent) {
-        try {
-          const storage = this.storage();
-          if (storage) {
-            storage.removeItem(STORAGE_KEY);
-            this.persistedRecordPresent = false;
-          }
-        } catch {
-          // Keep the flag set so a later clear can retry.
-        }
+      if (this.persistedRecordState !== "absent" || this.persistenceDirty) {
+        this.removePersistedPreferences();
       }
-    } else if (valueChanged) {
-      try {
-        const storage = this.storage();
-        if (storage) {
-          storage.setItem(STORAGE_KEY, JSON.stringify(this.preferences));
-          this.persistedRecordPresent = true;
-        }
-      } catch {
-        // Storage failures must not block in-memory preferences.
-      }
+    } else if (this.persistenceDirty) {
+      this.writePersistedPreferences();
     }
 
     if (!valueChanged) return;
@@ -258,6 +259,33 @@ export class VoicePreferencesStore extends EventTarget {
         detail: clonePreferences(next),
       }),
     );
+  }
+
+  private writePersistedPreferences(): void {
+    const storage = this.storage();
+    if (!storage) return;
+
+    try {
+      storage.setItem(STORAGE_KEY, JSON.stringify(this.preferences));
+      this.persistedRecordState = "present";
+      this.persistenceDirty = false;
+    } catch {
+      this.persistedRecordState = "unknown";
+    }
+  }
+
+  private removePersistedPreferences(): void {
+    const storage = this.storage();
+    if (!storage) return;
+
+    this.persistenceDirty = true;
+    try {
+      storage.removeItem(STORAGE_KEY);
+      this.persistedRecordState = "absent";
+      this.persistenceDirty = false;
+    } catch {
+      this.persistedRecordState = "unknown";
+    }
   }
 }
 

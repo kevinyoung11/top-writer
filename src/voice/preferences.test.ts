@@ -30,6 +30,23 @@ describe("VoicePreferencesStore", () => {
     expect(storage.setItem).not.toHaveBeenCalled();
   });
 
+  it("deep-freezes the exported defaults used by future stores", () => {
+    expect(Object.isFrozen(DEFAULT_VOICE_PREFERENCES)).toBe(true);
+    expect(Object.isFrozen(DEFAULT_VOICE_PREFERENCES.vocabulary)).toBe(true);
+    expect(
+      Object.getOwnPropertyDescriptor(DEFAULT_VOICE_PREFERENCES, "rate")
+        ?.writable,
+    ).toBe(false);
+
+    expect(new VoicePreferencesStore(new MemoryStorage()).value).toEqual({
+      language: "zh-CN",
+      rate: 1,
+      voiceURI: null,
+      vocabulary: [],
+      privacyNoticeAccepted: false,
+    });
+  });
+
   it("loads valid persisted fields and defaults invalid fields", () => {
     const storage = new MemoryStorage();
     storage.values.set(
@@ -87,6 +104,22 @@ describe("VoicePreferencesStore", () => {
     expect(() => store.update({ rate: 1.5 })).not.toThrow();
     expect(store.value.rate).toBe(1.5);
     expect(() => store.clear()).not.toThrow();
+  });
+
+  it("treats a failed read as unknown and removes after recovery", () => {
+    const storage = new MemoryStorage();
+    storage.values.set(STORAGE_KEY, JSON.stringify(DEFAULT_VOICE_PREFERENCES));
+    storage.getItem.mockImplementationOnce(() => {
+      throw new Error("temporarily blocked");
+    });
+    const store = new VoicePreferencesStore(storage);
+
+    expect(store.value).toEqual(DEFAULT_VOICE_PREFERENCES);
+    store.clear();
+
+    expect(storage.removeItem).toHaveBeenCalledOnce();
+    expect(storage.removeItem).toHaveBeenCalledWith(STORAGE_KEY);
+    expect(storage.values.has(STORAGE_KEY)).toBe(false);
   });
 
   it("treats an explicitly null storage as disabled", () => {
@@ -167,6 +200,26 @@ describe("VoicePreferencesStore", () => {
     expect(storage.setItem).not.toHaveBeenCalled();
     expect(storage.removeItem).not.toHaveBeenCalled();
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("retries a dirty write after storage recovers without re-emitting", () => {
+    const storage = new MemoryStorage();
+    storage.setItem.mockImplementationOnce(() => {
+      throw new Error("quota");
+    });
+    const store = new VoicePreferencesStore(storage);
+    const listener = vi.fn();
+    store.addEventListener("change", listener);
+
+    store.update({ rate: 1.5 });
+    expect(storage.values.has(STORAGE_KEY)).toBe(false);
+
+    store.update({ rate: 1.5 });
+    store.update({ rate: 1.5 });
+
+    expect(storage.setItem).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(storage.values.get(STORAGE_KEY) ?? "{}").rate).toBe(1.5);
+    expect(listener).toHaveBeenCalledOnce();
   });
 
   it("removes a serialized default record without emitting a change", () => {

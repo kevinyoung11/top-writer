@@ -25,6 +25,8 @@ const resultEvent = (
 class FakeRecognition {
   static instances: FakeRecognition[] = [];
   static throwOnNextStart = false;
+  static errorThenThrowOnNextStart: string | null = null;
+  static terminalThenThrowOnNextStop: "end" | "network" | null = null;
 
   lang = "";
   continuous = true;
@@ -36,12 +38,26 @@ class FakeRecognition {
   onend: SpeechRecognition["onend"] = null;
 
   readonly start = vi.fn(() => {
+    const synchronousError = FakeRecognition.errorThenThrowOnNextStart;
+    if (synchronousError !== null) {
+      FakeRecognition.errorThenThrowOnNextStart = null;
+      this.emitError(synchronousError);
+      throw new Error("start failed after error");
+    }
     if (FakeRecognition.throwOnNextStart) {
       FakeRecognition.throwOnNextStart = false;
       throw new Error("start failed");
     }
   });
-  readonly stop = vi.fn();
+  readonly stop = vi.fn(() => {
+    const synchronousTerminal = FakeRecognition.terminalThenThrowOnNextStop;
+    if (synchronousTerminal === null) return;
+
+    FakeRecognition.terminalThenThrowOnNextStop = null;
+    if (synchronousTerminal === "end") this.emitEnd();
+    else this.emitError(synchronousTerminal);
+    throw new Error("stop failed after terminal event");
+  });
   readonly abort = vi.fn(() => {
     this.onerror?.call(
       this as unknown as SpeechRecognition,
@@ -92,6 +108,8 @@ const handlers = (): RecognitionHandlers => ({
 beforeEach(() => {
   FakeRecognition.instances = [];
   FakeRecognition.throwOnNextStart = false;
+  FakeRecognition.errorThenThrowOnNextStart = null;
+  FakeRecognition.terminalThenThrowOnNextStop = null;
 });
 
 describe("BrowserSpeechRecognizer", () => {
@@ -193,6 +211,48 @@ describe("BrowserSpeechRecognizer", () => {
     expect(callbacks.onFinal).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["cancel", "restart"] as const)(
+    "does not emit a stale partial when onFinal triggers %s",
+    (action) => {
+      const callbacks = handlers();
+      const replacementCallbacks = handlers();
+      const recognizer = new BrowserSpeechRecognizer({
+        SpeechRecognition: constructorOf(FakeRecognition),
+      });
+      callbacks.onFinal = vi.fn(() => {
+        if (action === "cancel") recognizer.cancel();
+        else recognizer.start("zh-CN", replacementCallbacks);
+      });
+      recognizer.start("zh-CN", callbacks);
+      const engine = FakeRecognition.instances[0];
+
+      engine.emitResult(
+        resultEvent(0, [result("最终", true), result("旧的临时文本", false)]),
+      );
+
+      expect(callbacks.onFinal).toHaveBeenCalledWith("最终");
+      expect(callbacks.onPartial).not.toHaveBeenCalled();
+      expect(engine.abort).toHaveBeenCalledOnce();
+      expect(FakeRecognition.instances).toHaveLength(
+        action === "restart" ? 2 : 1,
+      );
+    },
+  );
+
+  it("keeps a synchronous start error terminal when start then throws", () => {
+    const callbacks = handlers();
+    const recognizer = new BrowserSpeechRecognizer({
+      SpeechRecognition: constructorOf(FakeRecognition),
+    });
+    FakeRecognition.errorThenThrowOnNextStart = "network";
+
+    expect(() => recognizer.start("zh-CN", callbacks)).not.toThrow();
+
+    expect(callbacks.onError).toHaveBeenCalledOnce();
+    expect(callbacks.onError).toHaveBeenCalledWith("network");
+    expect(callbacks.onEnd).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["no-speech", "no-speech"],
     ["not-allowed", "permission-denied"],
@@ -271,6 +331,29 @@ describe("BrowserSpeechRecognizer", () => {
     expect(engine.stop).toHaveBeenCalledOnce();
     expect(callbacks.onFinal).toHaveBeenCalledWith("最终结果");
   });
+
+  it.each(["end", "network"] as const)(
+    "keeps a synchronous stop %s terminal when stop then throws",
+    (terminal) => {
+      const callbacks = handlers();
+      const recognizer = new BrowserSpeechRecognizer({
+        SpeechRecognition: constructorOf(FakeRecognition),
+      });
+      recognizer.start("zh-CN", callbacks);
+      FakeRecognition.terminalThenThrowOnNextStop = terminal;
+
+      expect(() => recognizer.stop()).not.toThrow();
+
+      if (terminal === "end") {
+        expect(callbacks.onEnd).toHaveBeenCalledOnce();
+        expect(callbacks.onError).not.toHaveBeenCalled();
+      } else {
+        expect(callbacks.onError).toHaveBeenCalledOnce();
+        expect(callbacks.onError).toHaveBeenCalledWith("network");
+        expect(callbacks.onEnd).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("cleans up on end, error, and a synchronous start failure", () => {
     const recognizer = new BrowserSpeechRecognizer({
