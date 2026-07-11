@@ -163,6 +163,25 @@ describe("AgentSuggestionExtension", () => {
     expect(listAgentSuggestions(editor)).toEqual([]);
   });
 
+  it("preserves an insertion anchor at the source boundary of an accepted replacement", async () => {
+    const editor = createEditor("<p>abcd</p>");
+    expect(await addAgentSuggestions(editor, [
+      await operation(editor, "insert", "insertAfterRange", 1, 2, "!"),
+      await operation(editor, "replace", "replaceRange", 2, 4, "X"),
+    ])).toMatchObject({ ok: true });
+
+    expect(acceptAgentSuggestion(editor, "replace")).toEqual({
+      ok: true,
+      value: "replace",
+    });
+    expect(listAgentSuggestions(editor)[0]?.operation).toMatchObject({ from: 1, to: 2 });
+    expect(acceptAgentSuggestion(editor, "insert")).toEqual({
+      ok: true,
+      value: "insert",
+    });
+    expect(editor.getText()).toBe("a!Xd");
+  });
+
   it("renders insertions without marking their anchor text as deleted", async () => {
     const editor = createEditor();
     const bridge = new EditorBridge(editor);
