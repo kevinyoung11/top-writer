@@ -119,6 +119,31 @@ img.ProseMirror-separator {
   }
 }
 
+/* Ephemeral agent edits preserve the document until the user accepts them. */
+.agent-suggestion {
+  border-radius: 2px;
+  transition: outline-color 120ms ease, box-shadow 120ms ease;
+}
+
+.agent-suggestion-original {
+  color: #b42318;
+  background: #fff1f0;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.agent-suggestion-replacement {
+  color: #157f3d;
+  background: #e9f9ef;
+  text-decoration: none;
+}
+
+.agent-suggestion-current {
+  outline: 2px solid #7c3aed;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, #7c3aed 16%, transparent);
+}
+
 button {
   all: unset;
   font-size: 14px;

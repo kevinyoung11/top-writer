@@ -78,7 +78,27 @@ describe("AgentSuggestionExtension", () => {
       "beta",
     ]);
     expect(currentAgentSuggestion(editor)?.id).toBe("alpha");
+    expect(
+      editor.view.dom.querySelectorAll(
+        '.agent-suggestion-current[data-agent-suggestion-id="alpha"]',
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(
+      editor.view.dom.querySelectorAll(
+        '.agent-suggestion-current[data-agent-suggestion-id="beta"]',
+      ),
+    ).toHaveLength(0);
     expect(nextAgentSuggestion(editor)?.id).toBe("beta");
+    expect(
+      editor.view.dom.querySelectorAll(
+        '.agent-suggestion-current[data-agent-suggestion-id="alpha"]',
+      ),
+    ).toHaveLength(0);
+    expect(
+      editor.view.dom.querySelectorAll(
+        '.agent-suggestion-current[data-agent-suggestion-id="beta"]',
+      ).length,
+    ).toBeGreaterThan(0);
     expect(previousAgentSuggestion(editor)?.id).toBe("alpha");
     expect(editor.getJSON()).toEqual(before);
     expect(editor.view.dom.querySelectorAll("[data-agent-suggestion-id]").length).toBeGreaterThan(0);

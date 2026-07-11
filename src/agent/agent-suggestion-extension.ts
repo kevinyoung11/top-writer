@@ -59,9 +59,14 @@ const operationReplacement = (operation: AgentEditOperation) =>
 
 const decorationsForOperation = (
   operation: AgentEditOperation,
+  currentId: string | null,
 ): Decoration[] => {
   const attributes = {
-    class: `agent-suggestion agent-suggestion-${operation.type}`,
+    class: [
+      "agent-suggestion",
+      `agent-suggestion-${operation.type}`,
+      ...(operation.id === currentId ? ["agent-suggestion-current"] : []),
+    ].join(" "),
     "data-agent-suggestion-id": operation.id,
   };
   const replacement = operationReplacement(operation);
@@ -104,10 +109,16 @@ const decorationsForOperation = (
   ];
 };
 
-const decorationsForSuggestions = (doc: ProseMirrorNode, suggestions: readonly AgentSuggestion[]) =>
+const decorationsForSuggestions = (
+  doc: ProseMirrorNode,
+  suggestions: readonly AgentSuggestion[],
+  currentId: string | null,
+) =>
   DecorationSet.create(
     doc,
-    suggestions.flatMap((suggestion) => decorationsForOperation(suggestion.operation)),
+    suggestions.flatMap((suggestion) =>
+      decorationsForOperation(suggestion.operation, currentId),
+    ),
   );
 
 const isSuggestionMeta = (value: unknown): value is AgentSuggestionMeta => {
@@ -276,7 +287,11 @@ export const AgentSuggestionExtension = Extension.create({
               return {
                 suggestions,
                 currentId: pluginState.currentId ?? suggestions[0]?.id ?? null,
-                decorations: decorationsForSuggestions(transaction.doc, suggestions),
+                decorations: decorationsForSuggestions(
+                  transaction.doc,
+                  suggestions,
+                  pluginState.currentId ?? suggestions[0]?.id ?? null,
+                ),
               };
             }
 
@@ -284,7 +299,11 @@ export const AgentSuggestionExtension = Extension.create({
               return {
                 ...pluginState,
                 currentId: meta.id,
-                decorations: mappedDecorations,
+                decorations: decorationsForSuggestions(
+                  transaction.doc,
+                  pluginState.suggestions,
+                  meta.id,
+                ),
               };
             }
 
@@ -315,15 +334,7 @@ export const AgentSuggestionExtension = Extension.create({
             return {
               suggestions,
               currentId,
-              decorations: transaction.docChanged
-                ? mappedDecorations.remove(
-                    mappedDecorations.find(
-                      undefined,
-                      undefined,
-                      (spec) => ids.has((spec as { id?: string }).id ?? ""),
-                    ),
-                  )
-                : decorationsForSuggestions(transaction.doc, suggestions),
+              decorations: decorationsForSuggestions(transaction.doc, suggestions, currentId),
             };
           },
         },
