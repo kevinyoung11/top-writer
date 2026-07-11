@@ -501,29 +501,68 @@ describe("TextGenerationService cancellation and failures", () => {
     await expectAbort(aborted);
   });
 
-  it("rejects every local request on worker error and messageerror events", async () => {
-    const firstFixture = createService();
-    const first = firstFixture.service.generate(
-      requestFor(SupportedLocalModel["phi-2"], "one"),
-    );
-    const second = firstFixture.service.generate(
-      requestFor(SupportedLocalModel["phi-2"], "two"),
-    );
-    const firstAssertion = expect(first).rejects.toThrow("worker crashed");
-    const secondAssertion = expect(second).rejects.toThrow("worker crashed");
-    firstFixture.worker.emitError("worker crashed");
-    await Promise.all([firstAssertion, secondAssertion]);
+  it.each([
+    {
+      name: "error",
+      expectedMessage: "worker crashed",
+      emit: (worker: FakeWorker) => worker.emitError("worker crashed"),
+    },
+    {
+      name: "messageerror",
+      expectedMessage: "worker message could not be decoded",
+      emit: (worker: FakeWorker) =>
+        worker.emitMessageError({ malformed: true }),
+    },
+  ])(
+    "records a fatal worker $name and fails later local requests without posting",
+    async ({ expectedMessage, emit }) => {
+      const providers = createProviders();
+      const { service, worker } = createService(providers);
+      const current = service.generate(
+        requestFor(SupportedLocalModel["phi-2"], "current"),
+      );
+      const currentFailure = expect(current).rejects.toMatchObject({
+        name: "Error",
+        message: expectedMessage,
+      });
 
-    const secondFixture = createService();
-    const malformed = secondFixture.service.generate(
-      requestFor(SupportedLocalModel["phi-2"], "malformed"),
-    );
-    const malformedAssertion = expect(malformed).rejects.toThrow(
-      "worker message could not be decoded",
-    );
-    secondFixture.worker.emitMessageError({ malformed: true });
-    await malformedAssertion;
-  });
+      emit(worker);
+      await currentFailure;
+
+      const laterLocal = service.generate(
+        requestFor(SupportedLocalModel["phi-2"], "must not post"),
+      );
+      void laterLocal.catch(() => undefined);
+      expect(worker.posted).toHaveLength(1);
+      await expect(laterLocal).rejects.toMatchObject({
+        name: "Error",
+        message: expectedMessage,
+      });
+
+      await expect(
+        service.generate(requestFor(SupportedRemoteModel["gpt-5.4-mini"])),
+      ).resolves.toBe("gpt-result");
+      await expect(
+        service.generate(requestFor(SupportedRemoteModel["gemini-pro"])),
+      ).resolves.toBe("gemini-result");
+      await expect(
+        service.generate(requestFor(SupportedRemoteModel["gpt-5-nano-free"])),
+      ).resolves.toBe("wordflow-result");
+      expect(providers.gpt).toHaveBeenCalledTimes(1);
+      expect(providers.gemini).toHaveBeenCalledTimes(1);
+      expect(providers.wordflow).toHaveBeenCalledTimes(1);
+      expect(worker.posted).toHaveLength(1);
+
+      service.destroy();
+      expect(worker.listenerCount("message")).toBe(0);
+      expect(worker.listenerCount("error")).toBe(0);
+      expect(worker.listenerCount("messageerror")).toBe(0);
+      expect(worker.terminateCalled).toBe(false);
+      await expect(
+        service.generate(requestFor(SupportedRemoteModel["gpt-5.4-mini"])),
+      ).rejects.toThrow("TextGenerationService has been destroyed");
+    },
+  );
 
   it("cleans up a local request when postMessage throws", async () => {
     const { service, worker } = createService();

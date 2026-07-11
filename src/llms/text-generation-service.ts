@@ -70,6 +70,7 @@ export class TextGenerationService {
   readonly #pendingLocal = new Map<string, PendingLocalRequest>();
   readonly #activeControllers = new Set<AbortController>();
   #destroyed = false;
+  #fatalLocalWorkerError: Error | undefined;
 
   readonly #onWorkerMessage = (event: MessageEvent<unknown>) => {
     if (typeof event.data !== "object" || event.data === null) return;
@@ -101,11 +102,13 @@ export class TextGenerationService {
       event.error instanceof Error
         ? event.error
         : new Error(event.message || "text generation worker failed");
-    this.#rejectAllLocal(error);
+    this.#recordFatalLocalWorkerError(error);
   };
 
   readonly #onWorkerMessageError = () => {
-    this.#rejectAllLocal(new Error("worker message could not be decoded"));
+    this.#recordFatalLocalWorkerError(
+      new Error("worker message could not be decoded"),
+    );
   };
 
   constructor({ worker, providers = {} }: TextGenerationServiceOptions) {
@@ -226,6 +229,9 @@ export class TextGenerationService {
     signal: AbortSignal,
   ): Promise<string> {
     if (signal.aborted) return Promise.reject(createAbortError());
+    if (this.#fatalLocalWorkerError) {
+      return Promise.reject(this.#fatalLocalWorkerError);
+    }
 
     return new Promise<string>((resolve, reject) => {
       const onAbort = () => {
@@ -292,5 +298,10 @@ export class TextGenerationService {
     for (const requestId of [...this.#pendingLocal.keys()]) {
       this.#takeLocalRequest(requestId)?.reject(error);
     }
+  }
+
+  #recordFatalLocalWorkerError(error: Error) {
+    this.#fatalLocalWorkerError ??= error;
+    this.#rejectAllLocal(this.#fatalLocalWorkerError);
   }
 }
