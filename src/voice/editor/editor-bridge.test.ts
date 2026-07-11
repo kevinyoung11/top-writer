@@ -285,6 +285,186 @@ describe("EditorBridge", () => {
     bridge.destroy();
   });
 
+  it("discards a staged rewrite preview without mutating the editor", () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+    const preview = makePreview(
+      rangeForParagraph(bridge, 1),
+      "不应写入的预览文本",
+      "discard-rewrite",
+    );
+    const beforeDoc = editor.getJSON();
+    const beforeRevision = bridge.getRevision();
+    const beforeUndoDepth = undoDepth(editor.state);
+    const beforeRedoDepth = redoDepth(editor.state);
+
+    expectOk(bridge.stagePreview(preview));
+    expect(bridge.discardPreview(preview.id)).toEqual({
+      ok: true,
+      value: undefined,
+    });
+
+    expect(editor.getJSON()).toEqual(beforeDoc);
+    expect(bridge.getRevision()).toBe(beforeRevision);
+    expect(undoDepth(editor.state)).toBe(beforeUndoDepth);
+    expect(redoDepth(editor.state)).toBe(beforeRedoDepth);
+    expect(bridge.applyReplacement(preview.id)).toEqual({
+      ok: false,
+      reason: "preview-not-found",
+    });
+    expect(bridge.discardPreview(preview.id)).toEqual({
+      ok: false,
+      reason: "preview-not-found",
+    });
+
+    bridge.destroy();
+  });
+
+  it("discards the current undo preview and allows a fresh undo preview", () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+    const rewrite = makePreview(
+      rangeForParagraph(bridge, 1),
+      "已经应用的改写",
+      "discard-undo-rewrite",
+    );
+
+    expectOk(bridge.stagePreview(rewrite));
+    expectOk(bridge.applyReplacement(rewrite.id));
+    const beforeDiscardDoc = editor.getJSON();
+    const beforeDiscardRevision = bridge.getRevision();
+    const beforeDiscardUndoDepth = undoDepth(editor.state);
+    const beforeDiscardRedoDepth = redoDepth(editor.state);
+    const discardedUndoPreview = expectOk(bridge.previewUndoLastVoiceEdit());
+
+    expect(bridge.discardPreview(discardedUndoPreview.id)).toEqual({
+      ok: true,
+      value: undefined,
+    });
+    expect(editor.getJSON()).toEqual(beforeDiscardDoc);
+    expect(bridge.getRevision()).toBe(beforeDiscardRevision);
+    expect(undoDepth(editor.state)).toBe(beforeDiscardUndoDepth);
+    expect(redoDepth(editor.state)).toBe(beforeDiscardRedoDepth);
+    expect(bridge.undoLastVoiceEdit(discardedUndoPreview.id)).toEqual({
+      ok: false,
+      reason: "preview-not-found",
+    });
+    expect(editor.getJSON()).toEqual(beforeDiscardDoc);
+
+    const freshUndoPreview = expectOk(bridge.previewUndoLastVoiceEdit());
+    expect(freshUndoPreview.id).not.toBe(discardedUndoPreview.id);
+    expectOk(bridge.undoLastVoiceEdit(freshUndoPreview.id));
+    expect(bridge.getSnapshot().paragraphs[1].text).toBe(rewrite.originalText);
+
+    bridge.destroy();
+  });
+
+  it("notifies active revision listeners only for document revisions", () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+    const firstListenerRevisions: number[] = [];
+    const secondListenerRevisions: number[] = [];
+    const unsubscribeFirst = bridge.onRevisionChange((revision) => {
+      firstListenerRevisions.push(revision);
+    });
+    const unsubscribeSecond = bridge.onRevisionChange((revision) => {
+      secondListenerRevisions.push(revision);
+    });
+    const preview = makePreview(
+      rangeForParagraph(bridge, 0),
+      "仅用于确认监听范围",
+      "listener-preview",
+    );
+
+    expectOk(bridge.highlight("target", preview.range));
+    editor.view.dispatch(
+      editor.state.tr.setMeta("voice-copilot-listener-test", true),
+    );
+    expectOk(bridge.stagePreview(preview));
+    expectOk(bridge.discardPreview(preview.id));
+    expect(firstListenerRevisions).toEqual([]);
+    expect(secondListenerRevisions).toEqual([]);
+
+    const firstParagraph = bridge.getSnapshot().paragraphs[0];
+    editor.view.dispatch(editor.state.tr.insertText("一", firstParagraph.from));
+    expect(firstListenerRevisions).toEqual([1]);
+    expect(secondListenerRevisions).toEqual([1]);
+
+    unsubscribeFirst();
+    const secondParagraph = bridge.getSnapshot().paragraphs[1];
+    editor.view.dispatch(
+      editor.state.tr.insertText("二", secondParagraph.from),
+    );
+    expect(firstListenerRevisions).toEqual([1]);
+    expect(secondListenerRevisions).toEqual([1, 2]);
+
+    unsubscribeSecond();
+    bridge.destroy();
+  });
+
+  it("never calls revision listeners after unsubscribe or bridge destruction", () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+    const received: number[] = [];
+    const unsubscribe = bridge.onRevisionChange((revision) => {
+      received.push(revision);
+    });
+
+    unsubscribe();
+    editor.view.dispatch(
+      editor.state.tr.insertText(
+        "已退订",
+        bridge.getSnapshot().paragraphs[0].from,
+      ),
+    );
+    expect(received).toEqual([]);
+
+    const unsubscribeAfterDestroy = bridge.onRevisionChange((revision) => {
+      received.push(revision);
+    });
+    bridge.destroy();
+    editor.view.dispatch(
+      editor.state.tr.insertText(
+        "已销毁",
+        bridge.getSnapshot().paragraphs[1].from,
+      ),
+    );
+    unsubscribe();
+    unsubscribeAfterDestroy();
+    expect(received).toEqual([]);
+  });
+
+  it("does not call an unsubscribed or destroyed listener during notification", () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+    const calls: string[] = [];
+    let unsubscribeSecond = () => {};
+
+    bridge.onRevisionChange(() => {
+      calls.push("first");
+      unsubscribeSecond();
+    });
+    unsubscribeSecond = bridge.onRevisionChange(() => {
+      calls.push("second");
+    });
+    bridge.onRevisionChange(() => {
+      calls.push("third");
+      bridge.destroy();
+    });
+    bridge.onRevisionChange(() => {
+      calls.push("fourth");
+    });
+
+    editor.view.dispatch(
+      editor.state.tr.insertText(
+        "变更",
+        bridge.getSnapshot().paragraphs[0].from,
+      ),
+    );
+
+    expect(calls).toEqual(["first", "third"]);
+  });
+
   it("highlights a range with decorations without changing revision or history", () => {
     const editor = createEditor();
     const bridge = new EditorBridge(editor);

@@ -234,9 +234,28 @@ const isCrossTextblockRange = (
 export class EditorBridge {
   private readonly editor: Editor;
   private readonly stagedPreviews = new Map<string, StagedPreview>();
+  private readonly revisionListeners = new Set<(revision: number) => void>();
   private lastVoiceEdit: LastVoiceEdit | null = null;
   private undoPreviewId: string | null = null;
+  private lastObservedRevision = 0;
   private destroyed = false;
+  private readonly transactionListener = ({
+    transaction,
+  }: {
+    transaction: { docChanged: boolean };
+  }) => {
+    if (this.destroyed || !transaction.docChanged) return;
+
+    const revision = this.getRevision();
+    if (revision <= this.lastObservedRevision) return;
+
+    this.lastObservedRevision = revision;
+    for (const listener of [...this.revisionListeners]) {
+      if (this.destroyed) return;
+      if (!this.revisionListeners.has(listener)) continue;
+      listener(revision);
+    }
+  };
 
   constructor(editor: Editor) {
     this.editor = editor;
@@ -245,12 +264,16 @@ export class EditorBridge {
         "EditorBridge requires VoiceHighlightExtension to be registered.",
       );
     }
+    this.lastObservedRevision = this.getRevision();
+    this.editor.on("transaction", this.transactionListener);
   }
 
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.editor.off("transaction", this.transactionListener);
     this.stagedPreviews.clear();
+    this.revisionListeners.clear();
     this.lastVoiceEdit = null;
     this.undoPreviewId = null;
   }
@@ -349,6 +372,26 @@ export class EditorBridge {
   stagePreview(preview: RewritePreview): BridgeResult<void> {
     if (preview.mode !== "rewrite") return failure("invalid-range");
     return this.storePreview(preview);
+  }
+
+  discardPreview(previewId: string): BridgeResult<void> {
+    if (!this.stagedPreviews.delete(previewId)) {
+      return failure("preview-not-found");
+    }
+    if (this.undoPreviewId === previewId) {
+      this.undoPreviewId = null;
+    }
+    return success(undefined);
+  }
+
+  onRevisionChange(listener: (revision: number) => void): () => void {
+    if (this.destroyed) return () => {};
+
+    const subscription = (revision: number) => listener(revision);
+    this.revisionListeners.add(subscription);
+    return () => {
+      this.revisionListeners.delete(subscription);
+    };
   }
 
   private storePreview(preview: RewritePreview): BridgeResult<void> {
