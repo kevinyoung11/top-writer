@@ -71,6 +71,39 @@ afterEach(() => {
 });
 
 describe("voice rewrite shared suggestion review", () => {
+  it("routes a shared-review acceptance through the voice lifecycle and preserves undo", async () => {
+    const { editor, bridge, controller } = createController();
+
+    await controller.submitTranscript("改写当前段");
+    const preview = controller.state.preview;
+    if (!preview) throw new Error("Expected voice rewrite preview");
+
+    expect(bridge.currentAgentSuggestion()?.id).toBe(preview.id);
+    expect(controller.acceptSharedReviewSuggestion()).toBe(true);
+    expect(controller.state.phase).toBe("applied");
+    expect(controller.state.preview).toBeNull();
+    expect(editor.getText()).toBe("改写稿");
+
+    controller.requestUndo();
+    controller.confirmUndo();
+    expect(editor.getText()).toBe("原文");
+  });
+
+  it("routes a shared-review rejection through the voice lifecycle", async () => {
+    const { editor, bridge, controller } = createController();
+
+    await controller.submitTranscript("改写当前段");
+    const preview = controller.state.preview;
+    if (!preview) throw new Error("Expected voice rewrite preview");
+
+    expect(bridge.currentAgentSuggestion()?.id).toBe(preview.id);
+    expect(controller.rejectSharedReviewSuggestion()).toBe(true);
+    expect(controller.state.phase).toBe("idle");
+    expect(controller.state.preview).toBeNull();
+    expect(bridge.listAgentSuggestions()).toEqual([]);
+    expect(editor.getText()).toBe("原文");
+  });
+
   it("reviews voice rewrites through the shared facade before accepting, rejecting, and undoing", async () => {
     const { editor, bridge, controller } = createController();
 

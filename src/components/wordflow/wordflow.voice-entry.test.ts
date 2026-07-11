@@ -4,6 +4,7 @@ import "fake-indexeddb/auto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EditorBridge } from "../../voice/editor/editor-bridge";
 import type { VoiceCopilotController } from "../../voice/voice-copilot-controller";
 import type { VoiceCopilotState } from "../../voice/types";
 
@@ -82,11 +83,15 @@ class FakeController extends EventTarget {
   state = state("idle");
   cancel = vi.fn();
   destroy = vi.fn();
+  acceptSharedReviewSuggestion = vi.fn(() => true);
+  rejectSharedReviewSuggestion = vi.fn(() => true);
 }
 
 type WordflowElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   voiceController: VoiceCopilotController | null;
+  voiceBridge: EditorBridge | null;
+  voiceStateHandler(): void;
   requestUpdate(): void;
 };
 type WordflowElementConstructor = CustomElementConstructor & {
@@ -269,6 +274,47 @@ describe("wordflow voice entry", () => {
       ?.querySelector<HTMLButtonElement>("[aria-label='关闭语音副驾']")
       ?.click();
     expect(controller.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("opens shared review for a voice rewrite and routes acceptance through its controller", async () => {
+    const controller = new FakeController();
+    const preview = {
+      id: "voice-preview",
+      mode: "rewrite"
+    } as NonNullable<VoiceCopilotState["preview"]>;
+    controller.state = { ...state("preview"), preview };
+    const suggestion = {
+      id: preview.id,
+      operation: {}
+    };
+    const bridge = {
+      listAgentSuggestions: vi.fn(() => [suggestion]),
+      currentAgentSuggestion: vi.fn(() => suggestion),
+      previousAgentSuggestion: vi.fn(() => suggestion),
+      nextAgentSuggestion: vi.fn(() => suggestion),
+      acceptAgentSuggestion: vi.fn(),
+      rejectAgentSuggestion: vi.fn(),
+      acceptAllAgentSuggestions: vi.fn(),
+      rejectAllAgentSuggestions: vi.fn(),
+      destroy: vi.fn()
+    };
+    root.voiceController = controller as unknown as VoiceCopilotController;
+    root.voiceBridge = bridge as unknown as EditorBridge;
+
+    root.voiceStateHandler();
+    await root.updateComplete;
+
+    const review = root.shadowRoot?.querySelector(
+      "top-writer-agent-review-bar"
+    ) as HTMLElement & { updateComplete: Promise<boolean> };
+    expect(review.hidden).toBe(false);
+    await review.updateComplete;
+    review.shadowRoot
+      ?.querySelector<HTMLButtonElement>("[aria-label='Accept suggestion']")
+      ?.click();
+
+    expect(controller.acceptSharedReviewSuggestion).toHaveBeenCalledOnce();
+    expect(bridge.acceptAgentSuggestion).not.toHaveBeenCalled();
   });
 
   it("publishes the measured player height as a root CSS variable", async () => {

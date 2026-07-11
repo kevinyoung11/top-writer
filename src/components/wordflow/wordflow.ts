@@ -24,6 +24,7 @@ import { AgentSessionController } from '../../agent/agent-session-controller';
 import type { VoiceCopilotPanel } from '../voice-copilot/voice-copilot';
 import type {
   AgentToolbarCommand,
+  AgentToolbarBlockType,
   AgentToolbarFacade
 } from '../agent-editor/agent-toolbar';
 import type { AgentReviewFacade } from '../agent-editor/agent-review-bar';
@@ -148,6 +149,9 @@ export class WordflowWordflow extends LitElement {
 
   @state()
   private agentToolbarRefresh = 0;
+
+  @state()
+  private editorZoom = 100;
 
   @state()
   loadingActionIndex: number | null = null;
@@ -345,6 +349,10 @@ export class WordflowWordflow extends LitElement {
     this.agentReviewResizeObserver = null;
     this.observedAgentReview = null;
     this.voiceController?.destroy();
+    this.voiceController?.removeEventListener(
+      'state-change',
+      this.voiceStateHandler
+    );
     this.voiceController = null;
     this.agentController?.removeEventListener(
       'statechange',
@@ -376,6 +384,10 @@ export class WordflowWordflow extends LitElement {
       preferences: this.voicePreferences,
       getModelContext: () => ({ userConfig: this.userConfig, userID: this.initUserID() })
     });
+    this.voiceController.addEventListener(
+      'state-change',
+      this.voiceStateHandler
+    );
     this.agentController = new AgentSessionController({
       bridge,
       generator: this.textGenerationService,
@@ -402,6 +414,21 @@ export class WordflowWordflow extends LitElement {
     this.agentReviewRefresh += 1;
   };
 
+  private readonly voiceStateHandler = () => {
+    const preview = this.voiceController?.state.preview;
+    const hasSuggestions = (this.voiceBridge?.listAgentSuggestions().length ?? 0) > 0;
+    const isSharedVoicePreview =
+      preview?.mode === 'rewrite' &&
+      this.voiceBridge?.currentAgentSuggestion()?.id === preview.id;
+
+    if (isSharedVoicePreview) {
+      this.agentReviewVisible = true;
+    } else if (!hasSuggestions) {
+      this.agentReviewVisible = false;
+    }
+    this.agentReviewRefresh += 1;
+  };
+
   private readonly agentToolbarTransactionHandler = () => {
     this.agentToolbarRefresh += 1;
   };
@@ -412,6 +439,8 @@ export class WordflowWordflow extends LitElement {
     supports: command => this.supportsEditorCommand(command),
     isEnabled: command => this.canExecuteEditorCommand(command),
     isActive: command => this.isEditorCommandActive(command),
+    getZoom: () => this.editorZoom,
+    getBlockType: () => this.getEditorBlockType(),
     canLaunchAgent: () =>
       this.agentController !== null &&
       this.agentController.state.phase !== 'running'
@@ -422,10 +451,26 @@ export class WordflowWordflow extends LitElement {
     currentAgentSuggestion: () => this.voiceBridge?.currentAgentSuggestion() ?? null,
     previousAgentSuggestion: () => this.voiceBridge?.previousAgentSuggestion() ?? null,
     nextAgentSuggestion: () => this.voiceBridge?.nextAgentSuggestion() ?? null,
-    acceptAgentSuggestion: () => this.voiceBridge?.acceptAgentSuggestion(),
-    rejectAgentSuggestion: () => this.voiceBridge?.rejectAgentSuggestion(),
-    acceptAllAgentSuggestions: () => this.voiceBridge?.acceptAllAgentSuggestions(),
-    rejectAllAgentSuggestions: () => this.voiceBridge?.rejectAllAgentSuggestions(),
+    acceptAgentSuggestion: () => {
+      const id = this.voiceBridge?.currentAgentSuggestion()?.id;
+      if (this.voiceController?.acceptSharedReviewSuggestion(id)) return;
+      return this.voiceBridge?.acceptAgentSuggestion();
+    },
+    rejectAgentSuggestion: () => {
+      const id = this.voiceBridge?.currentAgentSuggestion()?.id;
+      if (this.voiceController?.rejectSharedReviewSuggestion(id)) return;
+      return this.voiceBridge?.rejectAgentSuggestion();
+    },
+    acceptAllAgentSuggestions: () => {
+      const previewId = this.voiceController?.state.preview?.id;
+      if (previewId) this.voiceController?.acceptSharedReviewSuggestion(previewId);
+      return this.voiceBridge?.acceptAllAgentSuggestions();
+    },
+    rejectAllAgentSuggestions: () => {
+      const previewId = this.voiceController?.state.preview?.id;
+      if (previewId) this.voiceController?.rejectSharedReviewSuggestion(previewId);
+      return this.voiceBridge?.rejectAllAgentSuggestions();
+    },
     close: () => {
       this.agentReviewVisible = false;
     }
@@ -435,19 +480,48 @@ export class WordflowWordflow extends LitElement {
     const names: Record<AgentToolbarCommand, string> = {
       undo: 'undo',
       redo: 'redo',
+      zoomOut: '',
+      zoomIn: '',
+      setParagraph: 'setParagraph',
+      setHeading1: 'setHeading',
+      setHeading2: 'setHeading',
+      setHeading3: 'setHeading',
       blockquote: 'toggleBlockquote',
       bold: 'toggleBold',
       italic: 'toggleItalic',
+      strike: 'toggleStrike',
       underline: 'toggleUnderline',
       bulletList: 'toggleBulletList',
       orderedList: 'toggleOrderedList',
       alignLeft: 'setTextAlign',
+      alignCenter: 'setTextAlign',
+      alignRight: 'setTextAlign',
+      alignJustify: 'setTextAlign',
       insertTable: 'insertTable'
     };
     return names[command];
   }
 
+  private editorCommandArguments(command: AgentToolbarCommand): unknown | undefined {
+    switch (command) {
+      case 'setHeading1': return { level: 1 };
+      case 'setHeading2': return { level: 2 };
+      case 'setHeading3': return { level: 3 };
+      case 'alignLeft': return 'left';
+      case 'alignCenter': return 'center';
+      case 'alignRight': return 'right';
+      case 'alignJustify': return 'justify';
+      case 'insertTable': return { rows: 3, cols: 3, withHeaderRow: true };
+      default: return undefined;
+    }
+  }
+
+  private isZoomCommand(command: AgentToolbarCommand) {
+    return command === 'zoomIn' || command === 'zoomOut';
+  }
+
   private supportsEditorCommand(command: AgentToolbarCommand) {
+    if (this.isZoomCommand(command)) return true;
     const editor = this.textEditorElement?.editor;
     const name = this.editorCommandName(command);
     return Boolean(
@@ -458,6 +532,8 @@ export class WordflowWordflow extends LitElement {
   }
 
   private canExecuteEditorCommand(command: AgentToolbarCommand) {
+    if (command === 'zoomIn') return this.editorZoom < 150;
+    if (command === 'zoomOut') return this.editorZoom > 50;
     const editor = this.textEditorElement?.editor;
     if (!editor || !this.supportsEditorCommand(command)) return false;
     const name = this.editorCommandName(command);
@@ -467,11 +543,10 @@ export class WordflowWordflow extends LitElement {
     >;
     const action = chain[name];
     if (typeof action !== 'function') return false;
-    if (command === 'alignLeft') return action.call(chain, 'left').run();
-    if (command === 'insertTable') {
-      return action.call(chain, { rows: 3, cols: 3, withHeaderRow: true }).run();
-    }
-    return action.call(chain).run();
+    const arguments_ = this.editorCommandArguments(command);
+    return arguments_ === undefined
+      ? action.call(chain).run()
+      : action.call(chain, arguments_).run();
   }
 
   private isEditorCommandActive(command: AgentToolbarCommand) {
@@ -481,15 +556,35 @@ export class WordflowWordflow extends LitElement {
       blockquote: 'blockquote',
       bold: 'bold',
       italic: 'italic',
+      strike: 'strike',
       underline: 'underline',
       bulletList: 'bulletList',
       orderedList: 'orderedList'
     };
     const name = names[command];
-    return name ? editor.isActive(name) : false;
+    if (name) return editor.isActive(name);
+    const alignment = this.editorCommandArguments(command);
+    return typeof alignment === 'string'
+      ? editor.isActive({ textAlign: alignment })
+      : false;
+  }
+
+  private getEditorBlockType(): AgentToolbarBlockType {
+    const editor = this.textEditorElement?.editor;
+    if (!editor) return 'paragraph';
+    for (const level of [1, 2, 3] as const) {
+      if (editor.isActive('heading', { level })) return `heading${level}` as AgentToolbarBlockType;
+    }
+    return 'paragraph';
   }
 
   private executeEditorCommand(command: AgentToolbarCommand) {
+    if (command === 'zoomIn' || command === 'zoomOut') {
+      const increment = command === 'zoomIn' ? 10 : -10;
+      this.editorZoom = Math.min(150, Math.max(50, this.editorZoom + increment));
+      this.agentToolbarRefresh += 1;
+      return;
+    }
     const editor = this.textEditorElement?.editor;
     if (!editor || !this.canExecuteEditorCommand(command)) return;
     const name = this.editorCommandName(command);
@@ -499,10 +594,9 @@ export class WordflowWordflow extends LitElement {
     >;
     const action = chain[name];
     if (typeof action !== 'function') return;
-    if (command === 'alignLeft') action.call(chain, 'left').run();
-    else if (command === 'insertTable') {
-      action.call(chain, { rows: 3, cols: 3, withHeaderRow: true }).run();
-    } else action.call(chain).run();
+    const arguments_ = this.editorCommandArguments(command);
+    if (arguments_ === undefined) action.call(chain).run();
+    else action.call(chain, arguments_).run();
     this.requestUpdate();
   }
 

@@ -367,6 +367,28 @@ export class VoiceCopilotController extends EventTarget {
     }
   }
 
+  /**
+   * Lets the shared Agent Editor review bar commit the active voice rewrite
+   * without bypassing the voice preview and undo bookkeeping.
+   */
+  acceptSharedReviewSuggestion(suggestionId?: string): boolean {
+    const preview = this.stateValue.preview;
+    const id = suggestionId ?? this.dependencies.editor.currentAgentSuggestion()?.id;
+    if (
+      !preview ||
+      preview.mode !== "rewrite" ||
+      id !== preview.id ||
+      !this.dependencies.editor
+        .listAgentSuggestions()
+        .some((suggestion) => suggestion.id === preview.id)
+    ) {
+      return false;
+    }
+
+    this.confirmPreview();
+    return this.stateValue.phase === "applied" && this.stateValue.preview === null;
+  }
+
   rejectPreview(): void {
     const preview = this.stateValue.preview;
     if (this.destroyed || !preview) return;
@@ -381,6 +403,28 @@ export class VoiceCopilotController extends EventTarget {
       errorCode: null,
       playback: this.idlePlayback(),
     });
+  }
+
+  /**
+   * Lets the shared Agent Editor review bar reject the active voice rewrite
+   * through the same cleanup path used by the voice panel.
+   */
+  rejectSharedReviewSuggestion(suggestionId?: string): boolean {
+    const preview = this.stateValue.preview;
+    const id = suggestionId ?? this.dependencies.editor.currentAgentSuggestion()?.id;
+    if (
+      !preview ||
+      preview.mode !== "rewrite" ||
+      id !== preview.id ||
+      !this.dependencies.editor
+        .listAgentSuggestions()
+        .some((suggestion) => suggestion.id === preview.id)
+    ) {
+      return false;
+    }
+
+    this.rejectPreview();
+    return this.stateValue.phase === "idle" && this.stateValue.preview === null;
   }
 
   requestUndo(): void {
