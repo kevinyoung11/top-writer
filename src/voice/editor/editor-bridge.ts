@@ -305,11 +305,12 @@ export class EditorBridge {
 
   addAgentSuggestions(
     operations: readonly AgentEditOperation[],
+    canCommit?: () => boolean,
   ): Promise<AgentSuggestionResult<string[]>> {
     if (this.destroyed) {
       return Promise.resolve({ ok: false, reason: "agent-suggestions-unavailable" });
     }
-    return addSuggestions(this.editor, operations);
+    return addSuggestions(this.editor, operations, canCommit);
   }
 
   listAgentSuggestions(): AgentSuggestion[] {

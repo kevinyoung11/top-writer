@@ -3,7 +3,7 @@ import type {
   TextGenerationService,
 } from "../llms/text-generation-service";
 import type { EditorSnapshot, ParagraphRef } from "../voice/types";
-import { parseAndValidateAgentEditOperations } from "./edit-protocol";
+import { hashOriginalText, parseAndValidateAgentEditOperations } from "./edit-protocol";
 import type { AgentEditOperation, AgentEditProtocolError } from "./types";
 
 export type AgentContextScope =
@@ -19,6 +19,7 @@ export type AgentContext =
       from: number;
       to: number;
       text: string;
+      originalTextHash: string;
     }
   | {
       kind: "current-block";
@@ -27,6 +28,7 @@ export type AgentContext =
       from: number;
       to: number;
       text: string;
+      originalTextHash: string;
     }
   | {
       kind: "document-outline";
@@ -37,12 +39,18 @@ export type AgentContext =
         from: number;
         to: number;
         length: number;
+        originalTextHash: string;
       }>;
     }
   | {
       kind: "document";
       revision: number;
       text: string;
+      targets: Array<{
+        from: number;
+        to: number;
+        originalTextHash: string;
+      }>;
     };
 
 export interface AgentEditorBridge {
@@ -50,6 +58,7 @@ export interface AgentEditorBridge {
   getSnapshot(): EditorSnapshot;
   addAgentSuggestions(
     operations: readonly AgentEditOperation[],
+    canCommit?: () => boolean,
   ): Promise<{ ok: boolean; value?: string[] }>;
   onRevisionChange(listener: (revision: number) => void): () => void;
 }
@@ -80,6 +89,7 @@ export interface AgentSessionControllerOptions {
   temperature: number;
   userConfig: GenerateTextRequest["userConfig"];
   userID: string;
+  createOutputAccumulator?: () => AgentOutputAccumulatorPort;
 }
 
 interface ActiveSession {
@@ -87,6 +97,36 @@ interface ActiveSession {
   revision: number;
   controller: AbortController;
   invalidated: "cancelled" | "stale-revision" | null;
+}
+
+/**
+ * A transport-neutral boundary for a future streaming generator.  The current
+ * text generation service returns one completed string, so no network
+ * streaming is invented here; consumers cannot read a partial JSON payload.
+ */
+export interface AgentOutputAccumulatorPort {
+  append(chunk: string): void;
+  finish(): string;
+  completeText(): string | null;
+}
+
+export class AgentOutputAccumulator implements AgentOutputAccumulatorPort {
+  #chunks: string[] = [];
+  #finished = false;
+
+  append(chunk: string) {
+    if (this.#finished) throw new Error("Cannot append after completion");
+    this.#chunks.push(chunk);
+  }
+
+  finish() {
+    this.#finished = true;
+    return this.#chunks.join("");
+  }
+
+  completeText() {
+    return this.#finished ? this.#chunks.join("") : null;
+  }
 }
 
 const paragraphForCurrentBlock = (snapshot: EditorSnapshot): ParagraphRef | null =>
@@ -97,14 +137,20 @@ const documentText = (snapshot: EditorSnapshot) =>
     .map((paragraph) => `${paragraph.separatorBefore ?? ""}${paragraph.text}`)
     .join("");
 
+const hashFor = async (text: string) => {
+  const result = await hashOriginalText(text);
+  if (!result.ok) throw new Error("Unable to create a trusted source hash");
+  return result.hash;
+};
+
 /**
  * Reads only the context granted by the caller.  The document scope is kept
  * explicit because it is the only scope that may include all document text.
  */
-export const readAgentContext = (
+export const readAgentContext = async (
   snapshot: EditorSnapshot,
   scope: AgentContextScope,
-): AgentContext => {
+): Promise<AgentContext> => {
   if (scope === "selection") {
     if (!snapshot.selection) {
       throw new Error("No selection is available for the agent session");
@@ -115,6 +161,7 @@ export const readAgentContext = (
       from: snapshot.selection.from,
       to: snapshot.selection.to,
       text: snapshot.selection.text,
+      originalTextHash: await hashFor(snapshot.selection.text),
     };
   }
 
@@ -130,6 +177,7 @@ export const readAgentContext = (
       from: paragraph.from,
       to: paragraph.to,
       text: paragraph.text,
+      originalTextHash: await hashFor(paragraph.text),
     };
   }
 
@@ -137,13 +185,14 @@ export const readAgentContext = (
     return {
       kind: "document-outline",
       revision: snapshot.revision,
-      blocks: snapshot.paragraphs.map((paragraph) => ({
+      blocks: await Promise.all(snapshot.paragraphs.map(async (paragraph) => ({
         index: paragraph.index,
         nodeType: paragraph.nodeType,
         from: paragraph.from,
         to: paragraph.to,
         length: paragraph.text.length,
-      })),
+        originalTextHash: await hashFor(paragraph.text),
+      }))),
     };
   }
 
@@ -151,6 +200,11 @@ export const readAgentContext = (
     kind: "document",
     revision: snapshot.revision,
     text: documentText(snapshot),
+    targets: await Promise.all(snapshot.paragraphs.map(async (paragraph) => ({
+      from: paragraph.from,
+      to: paragraph.to,
+      originalTextHash: await hashFor(paragraph.text),
+    }))),
   };
 };
 
@@ -168,9 +222,38 @@ const promptFor = (instruction: string, context: AgentContext) =>
     "You are a document editing agent.",
     "Return only a JSON array of edit operations; do not wrap it in Markdown or add commentary.",
     "Each operation must use replaceRange, insertAfterRange, or deleteRange and include id, revision, from, to, originalTextHash, and replacement where required.",
+    "Use only range/hash pairs supplied by CONTEXT. Copy originalTextHash exactly from the trusted context; never calculate or invent a hash.",
     `INSTRUCTION:\n${JSON.stringify(instruction)}`,
     `CONTEXT:\n${JSON.stringify(context)}`,
   ].join("\n\n");
+
+const targetsFor = (context: AgentContext) => {
+  if (context.kind === "document") return context.targets;
+  if (context.kind === "document-outline") {
+    return context.blocks.map(({ from, to, originalTextHash }) => ({
+      from,
+      to,
+      originalTextHash,
+    }));
+  }
+  return [{
+    from: context.from,
+    to: context.to,
+    originalTextHash: context.originalTextHash,
+  }];
+};
+
+const firstOperationOutsideTrustedContext = (
+  operations: readonly AgentEditOperation[],
+  context: AgentContext,
+) => {
+  const targets = targetsFor(context);
+  return operations.find((operation) => !targets.some((target) =>
+    target.from === operation.from &&
+    target.to === operation.to &&
+    target.originalTextHash === operation.originalTextHash,
+  ));
+};
 
 export class AgentSessionController extends EventTarget {
   readonly #bridge: AgentEditorBridge;
@@ -178,6 +261,7 @@ export class AgentSessionController extends EventTarget {
   readonly #temperature: number;
   readonly #userConfig: GenerateTextRequest["userConfig"];
   readonly #userID: string;
+  readonly #createOutputAccumulator: () => AgentOutputAccumulatorPort;
   #nextSessionId = 0;
   #active: ActiveSession | null = null;
   #state: AgentSessionState = {
@@ -188,13 +272,21 @@ export class AgentSessionController extends EventTarget {
   };
   #unsubscribeRevision: (() => void) | null = null;
 
-  constructor({ bridge, generator, temperature, userConfig, userID }: AgentSessionControllerOptions) {
+  constructor({
+    bridge,
+    generator,
+    temperature,
+    userConfig,
+    userID,
+    createOutputAccumulator = () => new AgentOutputAccumulator(),
+  }: AgentSessionControllerOptions) {
     super();
     this.#bridge = bridge;
     this.#generator = generator;
     this.#temperature = temperature;
     this.#userConfig = userConfig;
     this.#userID = userID;
+    this.#createOutputAccumulator = createOutputAccumulator;
     this.#unsubscribeRevision = bridge.onRevisionChange((revision) => {
       const active = this.#active;
       if (!active || revision === active.revision) return;
@@ -219,16 +311,6 @@ export class AgentSessionController extends EventTarget {
   async run(request: AgentSessionRequest): Promise<AgentSessionResult> {
     this.cancel();
     const snapshot = this.#bridge.getSnapshot();
-    const scope = request.context ?? (snapshot.selection ? "selection" : "current-block");
-    let context: AgentContext;
-    try {
-      context = readAgentContext(snapshot, scope);
-    } catch (error) {
-      const result: AgentSessionResult = { status: "error", error: toError(error) };
-      this.#setState({ phase: "error", sessionId: null, revision: snapshot.revision, result });
-      return result;
-    }
-
     const session: ActiveSession = {
       id: ++this.#nextSessionId,
       revision: snapshot.revision,
@@ -239,6 +321,9 @@ export class AgentSessionController extends EventTarget {
     this.#setState({ phase: "running", sessionId: session.id, revision: session.revision, result: null });
 
     try {
+      const scope = request.context ?? (snapshot.selection ? "selection" : "current-block");
+      const context = await readAgentContext(snapshot, scope);
+      if (!this.#isCurrent(session)) return this.#discardedResult(session);
       const output = await this.#generator.generate({
         prompt: promptFor(request.instruction, context),
         temperature: this.#temperature,
@@ -249,13 +334,30 @@ export class AgentSessionController extends EventTarget {
       });
       if (!this.#isCurrent(session)) return this.#discardedResult(session);
 
-      const parsed = await parseAndValidateAgentEditOperations(output, snapshot);
+      const accumulator = this.#createOutputAccumulator();
+      accumulator.append(output);
+      const completeOutput = accumulator.finish();
+      const parsed = await parseAndValidateAgentEditOperations(completeOutput, snapshot);
       if (!this.#isCurrent(session)) return this.#discardedResult(session);
       if (!parsed.ok) {
         return this.#finish(session, { status: "invalid-output", error: parsed.error });
       }
+      const untrustedOperation = firstOperationOutsideTrustedContext(
+        parsed.operations,
+        context,
+      );
+      if (untrustedOperation) {
+        return this.#finish(session, {
+          status: "invalid-output",
+          error: { code: "hash-mismatch", operationId: untrustedOperation.id },
+        });
+      }
 
-      const added = await this.#bridge.addAgentSuggestions(parsed.operations);
+      if (!this.#isCurrent(session)) return this.#discardedResult(session);
+      const added = await this.#bridge.addAgentSuggestions(
+        parsed.operations,
+        () => this.#isCurrent(session),
+      );
       if (!this.#isCurrent(session)) return this.#discardedResult(session);
       if (!added.ok) return this.#finish(session, { status: "suggestion-rejected" });
       return this.#finish(session, {

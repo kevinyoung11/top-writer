@@ -227,4 +227,17 @@ describe("AgentSuggestionExtension", () => {
     ]);
     expect(listAgentSuggestions(editor).map((suggestion) => suggestion.id)).toEqual(["duplicate"]);
   });
+
+  it("does not dispatch suggestions when admission is withdrawn after async validation", async () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+    const alpha = bridge.getSnapshot().paragraphs[0];
+    const candidate = await operation(editor, "cancelled", "replaceRange", alpha.from, alpha.to, "One");
+
+    await expect(addAgentSuggestions(editor, [candidate], () => false)).resolves.toEqual({
+      ok: false,
+      reason: "agent-suggestions-unavailable",
+    });
+    expect(listAgentSuggestions(editor)).toEqual([]);
+  });
 });

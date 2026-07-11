@@ -340,6 +340,7 @@ export const AgentSuggestionExtension = Extension.create({
 export const addAgentSuggestions = async (
   editor: Editor,
   operations: readonly AgentEditOperation[],
+  canCommit: () => boolean = () => true,
 ): Promise<AgentSuggestionResult<string[]>> => {
   const state = stateFor(editor);
   const revision = currentRevision(editor);
@@ -374,6 +375,11 @@ export const addAgentSuggestions = async (
     existing.add(operation.id);
     allOperations.push(operation);
   }
+
+  // This is deliberately adjacent to dispatch: callers such as the agent
+  // session controller can invalidate a request while async hash validation is
+  // running, and an invalidated request must never create decorations.
+  if (!canCommit()) return failure("agent-suggestions-unavailable");
 
   const suggestions = operations.map((operation) => ({
     id: operation.id,
