@@ -346,6 +346,16 @@
   }
 }
 
+top-writer-agent-toolbar,
+top-writer-agent-review-bar {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+top-writer-agent-review-bar[hidden] {
+  display: none;
+}
+
 top-writer-voice-player {
   flex: 0 0 auto;
   width: 100%;

@@ -20,7 +20,13 @@ import { SemanticLocator } from '../../voice/semantic-locator';
 import { BrowserSpeechRecognizer } from '../../voice/speech/browser-recognizer';
 import { BrowserSpeechSynthesizer } from '../../voice/speech/browser-synthesizer';
 import { VoiceCopilotController } from '../../voice/voice-copilot-controller';
+import { AgentSessionController } from '../../agent/agent-session-controller';
 import type { VoiceCopilotPanel } from '../voice-copilot/voice-copilot';
+import type {
+  AgentToolbarCommand,
+  AgentToolbarFacade
+} from '../agent-editor/agent-toolbar';
+import type { AgentReviewFacade } from '../agent-editor/agent-review-bar';
 import { PromptManager } from './prompt-manager';
 import { RemotePromptManager } from './remote-prompt-manager';
 import { UserConfigManager, UserConfig } from './user-config';
@@ -56,6 +62,8 @@ import '../privacy-dialog/privacy-dialog';
 import '../privacy-dialog/privacy-dialog-simple';
 import '../voice-player/voice-player';
 import '../voice-copilot/voice-copilot';
+import '../agent-editor/agent-toolbar';
+import '../agent-editor/agent-review-bar';
 
 // Assets
 import componentCSS from './wordflow.css?inline';
@@ -133,6 +141,15 @@ export class WordflowWordflow extends LitElement {
   private voiceDrawerOpen = false;
 
   @state()
+  private agentReviewVisible = false;
+
+  @state()
+  private agentReviewRefresh = 0;
+
+  @state()
+  private agentToolbarRefresh = 0;
+
+  @state()
   loadingActionIndex: number | null = null;
 
   @state()
@@ -184,6 +201,8 @@ export class WordflowWordflow extends LitElement {
   textGenerationService: TextGenerationService;
   private voiceController: VoiceCopilotController | null = null;
   private voiceBridge: EditorBridge | null = null;
+  private agentController: AgentSessionController | null = null;
+  private toolbarTransactionEditor: Editor | null = null;
   private readonly voicePreferences = new VoicePreferencesStore();
   private voicePlayerResizeObserver: ResizeObserver | null = null;
   private observedVoicePlayer: HTMLElement | null = null;
@@ -299,6 +318,17 @@ export class WordflowWordflow extends LitElement {
     this.observedVoicePlayer = null;
     this.voiceController?.destroy();
     this.voiceController = null;
+    this.agentController?.removeEventListener(
+      'statechange',
+      this.agentSessionStateHandler
+    );
+    this.agentController?.destroy();
+    this.agentController = null;
+    this.toolbarTransactionEditor?.off(
+      'transaction',
+      this.agentToolbarTransactionHandler
+    );
+    this.toolbarTransactionEditor = null;
     this.voiceBridge?.destroy();
     this.voiceBridge = null;
     this.textGenerationService.destroy();
@@ -318,7 +348,142 @@ export class WordflowWordflow extends LitElement {
       preferences: this.voicePreferences,
       getModelContext: () => ({ userConfig: this.userConfig, userID: this.initUserID() })
     });
+    this.agentController = new AgentSessionController({
+      bridge,
+      generator: this.textGenerationService,
+      temperature: 0.2,
+      userConfig: this.userConfig,
+      userID: this.initUserID()
+    });
+    this.agentController.addEventListener(
+      'statechange',
+      this.agentSessionStateHandler
+    );
+    const editor = this.textEditorElement?.editor;
+    if (editor) {
+      this.toolbarTransactionEditor = editor;
+      editor.on('transaction', this.agentToolbarTransactionHandler);
+    }
     this.requestUpdate();
+  }
+
+  private readonly agentSessionStateHandler = () => {
+    if (this.agentController?.state.result?.status === 'suggested') {
+      this.agentReviewVisible = true;
+    }
+    this.agentReviewRefresh += 1;
+  };
+
+  private readonly agentToolbarTransactionHandler = () => {
+    this.agentToolbarRefresh += 1;
+  };
+
+  private readonly agentToolbarController: AgentToolbarFacade = {
+    execute: command => this.executeEditorCommand(command),
+    launchAgent: () => this.launchAgentSession(),
+    supports: command => this.supportsEditorCommand(command),
+    isEnabled: command => this.canExecuteEditorCommand(command),
+    isActive: command => this.isEditorCommandActive(command),
+    canLaunchAgent: () =>
+      this.agentController !== null &&
+      this.agentController.state.phase !== 'running'
+  };
+
+  private readonly agentReviewController: AgentReviewFacade = {
+    listAgentSuggestions: () => this.voiceBridge?.listAgentSuggestions() ?? [],
+    currentAgentSuggestion: () => this.voiceBridge?.currentAgentSuggestion() ?? null,
+    previousAgentSuggestion: () => this.voiceBridge?.previousAgentSuggestion() ?? null,
+    nextAgentSuggestion: () => this.voiceBridge?.nextAgentSuggestion() ?? null,
+    acceptAgentSuggestion: () => this.voiceBridge?.acceptAgentSuggestion(),
+    rejectAgentSuggestion: () => this.voiceBridge?.rejectAgentSuggestion(),
+    acceptAllAgentSuggestions: () => this.voiceBridge?.acceptAllAgentSuggestions(),
+    rejectAllAgentSuggestions: () => this.voiceBridge?.rejectAllAgentSuggestions(),
+    close: () => {
+      this.agentReviewVisible = false;
+    }
+  };
+
+  private editorCommandName(command: AgentToolbarCommand) {
+    const names: Record<AgentToolbarCommand, string> = {
+      undo: 'undo',
+      redo: 'redo',
+      blockquote: 'toggleBlockquote',
+      bold: 'toggleBold',
+      italic: 'toggleItalic',
+      underline: 'toggleUnderline',
+      bulletList: 'toggleBulletList',
+      orderedList: 'toggleOrderedList',
+      alignLeft: 'setTextAlign',
+      insertTable: 'insertTable'
+    };
+    return names[command];
+  }
+
+  private supportsEditorCommand(command: AgentToolbarCommand) {
+    const editor = this.textEditorElement?.editor;
+    const name = this.editorCommandName(command);
+    return Boolean(
+      editor &&
+        typeof (editor.commands as unknown as Record<string, unknown>)[name] ===
+          'function'
+    );
+  }
+
+  private canExecuteEditorCommand(command: AgentToolbarCommand) {
+    const editor = this.textEditorElement?.editor;
+    if (!editor || !this.supportsEditorCommand(command)) return false;
+    const name = this.editorCommandName(command);
+    const chain = editor.can().chain().focus() as unknown as Record<
+      string,
+      (...args: unknown[]) => { run: () => boolean }
+    >;
+    const action = chain[name];
+    if (typeof action !== 'function') return false;
+    if (command === 'alignLeft') return action.call(chain, 'left').run();
+    if (command === 'insertTable') {
+      return action.call(chain, { rows: 3, cols: 3, withHeaderRow: true }).run();
+    }
+    return action.call(chain).run();
+  }
+
+  private isEditorCommandActive(command: AgentToolbarCommand) {
+    const editor = this.textEditorElement?.editor;
+    if (!editor) return false;
+    const names: Partial<Record<AgentToolbarCommand, string>> = {
+      blockquote: 'blockquote',
+      bold: 'bold',
+      italic: 'italic',
+      underline: 'underline',
+      bulletList: 'bulletList',
+      orderedList: 'orderedList'
+    };
+    const name = names[command];
+    return name ? editor.isActive(name) : false;
+  }
+
+  private executeEditorCommand(command: AgentToolbarCommand) {
+    const editor = this.textEditorElement?.editor;
+    if (!editor || !this.canExecuteEditorCommand(command)) return;
+    const name = this.editorCommandName(command);
+    const chain = editor.chain().focus() as unknown as Record<
+      string,
+      (...args: unknown[]) => { run: () => boolean }
+    >;
+    const action = chain[name];
+    if (typeof action !== 'function') return;
+    if (command === 'alignLeft') action.call(chain, 'left').run();
+    else if (command === 'insertTable') {
+      action.call(chain, { rows: 3, cols: 3, withHeaderRow: true }).run();
+    } else action.call(chain).run();
+    this.requestUpdate();
+  }
+
+  private launchAgentSession() {
+    if (!this.agentController || this.agentController.state.phase === 'running') return;
+    void this.agentController.run({
+      instruction: 'Improve the selected text while preserving its meaning.',
+      context: this.voiceBridge?.getSnapshot().selection ? 'selection' : 'current-block'
+    });
   }
 
   private openVoiceDrawer() {
@@ -687,6 +852,10 @@ export class WordflowWordflow extends LitElement {
         </div>
 
         <div class="center-panel">
+          <top-writer-agent-toolbar
+            .controller=${this.agentToolbarController}
+            .refreshToken=${this.agentToolbarRefresh}
+          ></top-writer-agent-toolbar>
           <div class="editor-content">
             <wordflow-text-editor
               .popperSidebarBox=${this.popperSidebarBox}
@@ -704,6 +873,11 @@ export class WordflowWordflow extends LitElement {
               }}
             ></wordflow-text-editor>
           </div>
+          <top-writer-agent-review-bar
+            ?hidden=${!this.agentReviewVisible}
+            .controller=${this.agentReviewController}
+            .refreshToken=${this.agentReviewRefresh}
+          ></top-writer-agent-review-bar>
           ${this.voiceController ? html`<top-writer-voice-player .controller=${this.voiceController}></top-writer-voice-player>` : null}
         </div>
 

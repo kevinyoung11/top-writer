@@ -1,0 +1,12 @@
+:host { display: block; background: #101827; color: white; }
+section { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 10px; box-sizing: border-box; font-size: .82rem; }
+.count { flex: 1 1 auto; min-width: 92px; color: #e5e7eb; font-variant-numeric: tabular-nums; }
+.navigation, .decisions { display: flex; gap: 4px; }
+button { min-height: 30px; padding: 0 8px; border: 1px solid #4b5563; border-radius: 4px; background: #1f2937; color: white; cursor: pointer; font: inherit; }
+button:hover:not(:disabled) { background: #374151; }
+button:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+button:disabled { cursor: not-allowed; opacity: .44; }
+.decisions button:first-child, .decisions button:nth-child(3) { border-color: #16803c; background: #166534; }
+.decisions button:nth-child(2), .decisions button:nth-child(4) { border-color: #a83232; background: #7f1d1d; }
+.close { min-width: 30px; padding: 0; font-size: 1.2rem; }
+@media (max-width: 699px) { section { flex-wrap: wrap; gap: 5px; padding: 7px 10px; } .count { flex-basis: calc(100% - 38px); } .decisions { order: 3; width: 100%; } .decisions button { flex: 1 1 auto; min-height: 34px; } }
