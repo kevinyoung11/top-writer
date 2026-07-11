@@ -179,8 +179,11 @@ const mapOperation = (
   revision: number,
 ): AgentEditOperation => ({
   ...operation,
-  from: mapping.map(operation.from, -1),
-  to: mapping.map(operation.to, 1),
+  // A replacement/delete owns the source text between its boundaries.  When
+  // an adjacent accepted insertion lands on either boundary, keep that
+  // independently accepted text outside the mapped source range.
+  from: mapping.map(operation.from, operation.type === "insertAfterRange" ? -1 : 1),
+  to: mapping.map(operation.to, operation.type === "insertAfterRange" ? 1 : -1),
   revision,
 });
 
