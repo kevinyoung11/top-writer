@@ -140,28 +140,11 @@ const validateTarget = (
 };
 
 const hasNonPlainOutput = (output: string) => {
-  const markdownPatterns = [
-    /```/u,
-    /(?:^|\n)\s{0,3}#{1,6}\s+\S/u,
-    /(?:^|\n)\s*(?:[-+*]\s+|\d+[.)]\s+)/u,
-    /(?:^|\n)\s*>\s?\S/u,
-    /\*\*[^*\n]+\*\*/u,
-    /__[^_\n]+__/u,
-    /(?<![\p{L}\p{N}])_(?=\S)[^_\n]*\S_(?![\p{L}\p{N}])/u,
-    /!?\[[^\]\n]+\]\([^\s)]+\)/u,
-    /`[^`\n]+`/u,
-  ];
-  const hasAsteriskEmphasis = [...output.matchAll(/\*([^*\n]+)\*/gu)].some(
-    (match) => !/^[\d\s.+\-*/()]+$/u.test(match[1] ?? ""),
-  );
+  const fencedCodeBlock = /(?:^|\n)```[^\n]*(?:\n|$)/u;
   const commentaryPrefix =
-    /^(?:改写如下|改写后(?:的)?(?:文本|版本)?|修改(?:后)?(?:的)?(?:文本|版本)?|(?:以下|这里)是(?:改写|修改)(?:后)?(?:的)?(?:文本|版本)?|建议(?:改写|修改)(?:为|如下)?)[：:]/u;
+    /^(?:改写如下|修改如下|改写后(?:的)?(?:文本|版本)?|修改(?:后)?(?:的)?(?:文本|版本)?|(?:以下|这里)是(?:改写|修改)(?:后)?(?:的)?(?:文本|版本)?|建议(?:改写|修改)(?:为|如下)?)[：:]/u;
 
-  return (
-    commentaryPrefix.test(output) ||
-    hasAsteriskEmphasis ||
-    markdownPatterns.some((pattern) => pattern.test(output))
-  );
+  return fencedCodeBlock.test(output) || commentaryPrefix.test(output);
 };
 
 const promptFor = (input: RewriteInput, target: ValidatedTarget) => {

@@ -14,6 +14,7 @@ import type {
   TextGenerationService,
 } from "../llms/text-generation-service";
 import { RewriteService, RewriteServiceError } from "./rewrite-service";
+import { resolveScope } from "./scope-resolver";
 import type { EditorSnapshot, ParagraphRef, VoiceRange } from "./types";
 import { EditorBridge } from "./editor/editor-bridge";
 import { VoiceHighlightExtension } from "./editor/voice-highlight-extension";
@@ -275,6 +276,29 @@ describe("RewriteService", () => {
     );
   });
 
+  it("passes a bridge-resolved document range with canonical HR separators to rewrite", async () => {
+    const { editor, bridge } = createEditorBridge(
+      "<p>Alpha</p><hr><p>Beta</p>",
+    );
+    const doc = bridge.getSnapshot();
+    const range = resolveScope({ kind: "document" }, doc, null);
+    if (!range) throw new Error("Expected the document scope to resolve");
+
+    expect(range.text).toBe(
+      editor.state.doc.textBetween(range.from, range.to, "\n\n", "\n"),
+    );
+    const generated = createGenerator("全文替换内容");
+    const service = new RewriteService(generated.service);
+
+    await expect(service.rewrite(requestInput({ doc, range }))).resolves.toBe(
+      "全文替换内容",
+    );
+    expect(generated.generate).toHaveBeenCalledTimes(1);
+    expect(firstGeneratedRequest(generated.generate).prompt).toContain(
+      `目标原文：${JSON.stringify(range.text)}`,
+    );
+  });
+
   it("rejects a cross-block range without an exact structural separator before generating", async () => {
     const doc = snapshot();
     const range = crossPartialRange(doc);
@@ -368,15 +392,11 @@ describe("RewriteService", () => {
     ["", "empty-output"],
     ["  选中片段\n", "unchanged-output"],
     ["```markdown\n改写后的文本\n```", "non-plain-output"],
+    ["  ```markdown\n改写后的文本\n  ```", "non-plain-output"],
     ["改写如下：**新文本**", "non-plain-output"],
     ["改写如下：新文本", "non-plain-output"],
-    ["# Markdown 标题\n正文", "non-plain-output"],
-    ["- Markdown 列表", "non-plain-output"],
-    ["> Markdown 引用", "non-plain-output"],
-    ["这是 *强调* 文本", "non-plain-output"],
-    ["这是 _强调_ 文本", "non-plain-output"],
-    ["[链接](https://example.com)", "non-plain-output"],
-    ["`行内代码`", "non-plain-output"],
+    ["以下是改写后的文本：新文本", "non-plain-output"],
+    ["修改如下：新文本", "non-plain-output"],
   ] as const)("rejects %s as a typed %s error", async (output, code) => {
     const generated = createGenerator(output);
     const service = new RewriteService(generated.service);
@@ -392,7 +412,16 @@ describe("RewriteService", () => {
     "第一段改写。\n\n第二段改写。",
     "普通句子：保留中文标点，括号（示例）和引号“内容”。",
     "数学表达式 2*3*4，不应被当作 Markdown。",
-  ])("accepts ordinary plain-text output %s", async (output) => {
+    "变量 a * b * c，应作为正文保留。",
+    "- 此处是正文中的破折号说明。",
+    "# 1 号公告",
+    "> 此处是可插入的正文。",
+    "这是 *强调* 文本，也可能就是原文。",
+    "这是 _强调_ 文本，也可能就是原文。",
+    "[链接](https://example.com) 也可以是正文。",
+    "https://example.com/path 是裸链接文本。",
+    "`行内字面量` 是可插入文本。",
+  ])("accepts editor-insertable plain or literal text %s", async (output) => {
     const generated = createGenerator(output);
     const service = new RewriteService(generated.service);
 
