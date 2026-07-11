@@ -25,6 +25,15 @@ describe("VoiceCopilotPanel", () => {
     input.value = "  朗读这一段  "; panel.shadowRoot?.querySelector<HTMLFormElement>("form")?.requestSubmit();
     expect(controller.submitTranscript).toHaveBeenCalledWith("朗读这一段");
   });
+  it("requires explicit speech privacy acceptance before listening", async () => {
+    panel.shadowRoot?.querySelector<HTMLButtonElement>("[aria-label=开始语音指令]")?.click();
+    await panel.updateComplete;
+    expect(controller.startListening).not.toHaveBeenCalled();
+    expect(panel.shadowRoot?.textContent).toContain("Chrome 可能将本次音频发送给其语音识别服务商");
+    panel.shadowRoot?.querySelector<HTMLButtonElement>("[aria-label=同意语音隐私说明]")?.click();
+    expect(controller.startListening).toHaveBeenCalledOnce();
+    expect(panel.preferences?.value.privacyNoticeAccepted).toBe(true);
+  });
   it("requires confirmation before applying a rewrite preview", async () => {
     controller.emit(state({ phase: "preview", preview: { id: "p", revision: 1, range: { revision: 1, from: 1, to: 2, text: "旧", paragraphIndexes: [0], block: false }, originalText: "旧", replacementText: "新", segments: [{ kind: "delete", text: "旧" }, { kind: "insert", text: "新" }], mode: "rewrite" } })); await panel.updateComplete;
     expect(panel.shadowRoot?.textContent).toContain("应用");
