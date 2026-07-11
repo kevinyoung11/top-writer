@@ -13,7 +13,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
-    "verify": "npm run typecheck && npm run test:unit && npm run build",
+    "verify": "npm run typecheck && npm run test:unit && npm run build && npm run test:e2e",
     "build:github": "tsc && vite build --mode github",
     "deploy:github": "pnpm run build:github && pnpm gh-pages -m \"Deploy $(git log '--format=format:%H' main -1)\" -d ./dist",
     "deploy:vercel": "pnpm run build && cp -r .vercel ./dist/ && vercel ./dist",
