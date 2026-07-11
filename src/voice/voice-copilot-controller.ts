@@ -463,7 +463,11 @@ export class VoiceCopilotController extends EventTarget {
     const preview = this.stateValue.preview;
     if (this.destroyed || !preview) return;
     const token = ++this.operationToken;
+    // A replacement uses temporary, non-document coordinates. Clear only an
+    // interrupted original-preview playback marker before it starts; target
+    // and candidate decorations still describe the live document preview.
     this.stopSpeech(false);
+    this.dependencies.editor.highlight("playback", null);
     const snapshot = this.snapshot();
     if (snapshot.revision !== preview.revision) {
       this.failPreview(
@@ -605,8 +609,7 @@ export class VoiceCopilotController extends EventTarget {
       case "rewrite":
         return this.rewrite(action, token);
       case "control":
-        this.runControl(action.control);
-        return false;
+        return this.runControl(action.control);
       case "undo":
         this.requestUndo();
         return false;
@@ -616,25 +619,26 @@ export class VoiceCopilotController extends EventTarget {
     }
   }
 
-  private runControl(control: VoiceAction["control"]): void {
+  private runControl(control: VoiceAction["control"]): boolean {
     switch (control) {
       case "pause":
         this.pause();
-        break;
+        return true;
       case "resume":
         this.resume();
-        break;
+        return true;
       case "stop":
         this.stop();
-        break;
+        return false;
       case "faster":
         this.setRate(this.stateValue.playback.rate + 0.1);
-        break;
+        return true;
       case "slower":
         this.setRate(this.stateValue.playback.rate - 0.1);
-        break;
+        return true;
       default:
         this.setError("unsupported-command", "无法执行该播放控制。");
+        return false;
     }
   }
 

@@ -568,6 +568,17 @@ describe("VoiceCopilotController", () => {
     expect(controller.state.playback.rate).toBe(0.5);
   });
 
+  it("settles standalone playback controls instead of leaving the controller understanding", async () => {
+    const { controller, preferences } = createController();
+
+    await controller.submitTranscript("暂停");
+    expect(controller.state).toMatchObject({ phase: "idle", errorCode: null });
+
+    await controller.submitTranscript("快一点");
+    expect(controller.state).toMatchObject({ phase: "idle", errorCode: null });
+    expect(preferences.value.rate).toBe(1.1);
+  });
+
   it("executes a unique locate → read → rewrite plan in order without mutating before preview", async () => {
     const value = snapshot();
     const locating = createDeferred<LocateCandidate[]>();
@@ -800,9 +811,39 @@ describe("VoiceCopilotController", () => {
       block: false,
     });
     synthesizer.startChunk();
-    expect(editor.highlights).toHaveLength(highlightsBeforeReplacement);
+    expect(editor.highlights.slice(highlightsBeforeReplacement)).toEqual([
+      { channel: "playback", range: null },
+    ]);
     synthesizer.finish();
     await replacement;
+  });
+
+  it("clears a live original playback highlight before speaking an unhighlighted replacement", async () => {
+    const { controller, editor, synthesizer } = createController();
+    await controller.submitTranscript("改写当前段");
+
+    const original = controller.speakOriginal();
+    await Promise.resolve();
+    synthesizer.startChunk();
+    expect(editor.highlights.at(-1)).toMatchObject({
+      channel: "playback",
+      range: expect.any(Object),
+    });
+
+    const replacement = controller.speakReplacement();
+    await Promise.resolve();
+    expect(editor.highlights.at(-1)).toEqual({
+      channel: "playback",
+      range: null,
+    });
+    synthesizer.startChunk();
+    expect(editor.highlights.at(-1)).toEqual({
+      channel: "playback",
+      range: null,
+    });
+
+    synthesizer.finish();
+    await Promise.all([original, replacement]);
   });
 
   it("maps recognition capability and service errors without staging or applying text", () => {
