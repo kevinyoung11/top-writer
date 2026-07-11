@@ -20,6 +20,11 @@ class FakeController extends EventTarget {
 describe("VoiceCopilotPanel", () => {
   let controller: FakeController; let panel: VoiceCopilotPanel;
   beforeEach(async () => { controller = new FakeController(); panel = document.createElement("top-writer-voice-copilot") as VoiceCopilotPanel; panel.controller = controller as unknown as VoiceCopilotController; panel.preferences = new VoicePreferencesStore(null); document.body.append(panel); await panel.updateComplete; });
+  it("focuses its heading through the public focusHeading method", () => {
+    panel.focusHeading();
+
+    expect(panel.shadowRoot?.activeElement?.tagName).toBe("H1");
+  });
   it("keeps a text command fallback and submits trimmed input", async () => {
     const input = panel.shadowRoot?.querySelector<HTMLInputElement>("input[name=command]")!;
     input.value = "  朗读这一段  "; panel.shadowRoot?.querySelector<HTMLFormElement>("form")?.requestSubmit();
