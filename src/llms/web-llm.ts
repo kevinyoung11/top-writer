@@ -115,6 +115,7 @@ const initProgressCallback = (report: webllm.InitProgressReport) => {
 };
 
 let engine: Promise<webllm.EngineInterface> | null = null;
+let textGenerationQueue: Promise<void> = Promise.resolve();
 
 //==========================================================================||
 //                          Worker Event Handlers                           ||
@@ -132,7 +133,7 @@ self.onmessage = (e: MessageEvent<TextGenLocalWorkerMessage>) => {
     }
 
     case 'startTextGen': {
-      startTextGen(
+      enqueueTextGen(
         e.data.payload.requestID,
         e.data.payload.prompt,
         e.data.payload.temperature
@@ -213,17 +214,22 @@ const startTextGen = async (
 ) => {
   try {
     const curEngine = await engine!;
-    const response = await curEngine.chat.completions.create({
-      messages: [{ role: 'user', content: prompt }],
-      n: 1,
-      max_gen_len: 2048,
-      // Override temperature to 0 because local models are very unstable
-      temperature: 0
-      // logprobs: false
-    });
-
-    // Reset the chat cache to avoid memorizing previous messages
-    await curEngine.resetChat();
+    const response = await (async () => {
+      try {
+        return await curEngine.chat.completions.create({
+          messages: [{ role: 'user', content: prompt }],
+          n: 1,
+          max_gen_len: 2048,
+          // Override temperature to 0 because local models are very unstable
+          temperature: 0
+          // logprobs: false
+        });
+      } finally {
+        // Reset the chat cache even after a failed request so the next queued
+        // request cannot inherit partial state from this generation.
+        await curEngine.resetChat();
+      }
+    })();
 
     // Send back the data to the main thread
     const message: TextGenLocalWorkerMessage = {
@@ -249,6 +255,21 @@ const startTextGen = async (
     };
     postMessage(message);
   }
+};
+
+/**
+ * WebLLM keeps one mutable chat cache, so a generation and its reset must run
+ * as one FIFO task. Keep unexpected task failures from poisoning later work.
+ */
+const enqueueTextGen = (
+  requestID: string,
+  prompt: string,
+  temperature: number
+) => {
+  const task = textGenerationQueue.then(() =>
+    startTextGen(requestID, prompt, temperature)
+  );
+  textGenerationQueue = task.catch(() => undefined);
 };
 
 //==========================================================================||

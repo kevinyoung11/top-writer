@@ -757,20 +757,53 @@ describe("fetch text-generation providers", () => {
 });
 
 describe("WebLLM worker protocol", () => {
-  it("echoes the exact incoming request ID on success and failure", async () => {
+  it("serializes overlapping stateful generations and continues after a failure", async () => {
     const postMessage = vi.fn();
     const workerScope: {
       onmessage: ((event: MessageEvent) => void) | null;
     } = { onmessage: null };
-    const createCompletion = vi
-      .fn()
-      .mockResolvedValueOnce({
-        choices: [{ message: { content: "local result" } }],
-      })
-      .mockRejectedValueOnce(new Error("local failure"));
+    const firstCompletion = deferred<void>();
+    const secondCompletion = deferred<void>();
+    const recoveryCompletion = deferred<void>();
+    const firstReset = deferred<void>();
+    const secondReset = deferred<void>();
+    const failingReset = deferred<void>();
+    const recoveryReset = deferred<void>();
+    const resetCompletions = new Map([
+      ["first prompt", firstReset],
+      ["second prompt", secondReset],
+      ["failing prompt", failingReset],
+      ["recovery prompt", recoveryReset],
+    ]);
+    let activePrompt = "";
+    const createCompletion = vi.fn(
+      async ({ messages }: { messages: Array<{ content: string }> }) => {
+        const prompt = messages[0].content;
+        activePrompt = prompt;
+
+        if (prompt === "failing prompt") {
+          throw new Error("local failure");
+        }
+
+        if (prompt === "first prompt") {
+          await firstCompletion.promise;
+        } else if (prompt === "second prompt") {
+          await secondCompletion.promise;
+        } else if (prompt === "recovery prompt") {
+          await recoveryCompletion.promise;
+        }
+
+        return {
+          choices: [{ message: { content: `result:${activePrompt}` } }],
+        };
+      },
+    );
     const engine = {
       chat: { completions: { create: createCompletion } },
-      resetChat: vi.fn(async () => undefined),
+      resetChat: vi.fn(async () => {
+        await resetCompletions.get(activePrompt)?.promise;
+        activePrompt = "";
+      }),
     };
     vi.stubGlobal("self", workerScope);
     vi.stubGlobal("postMessage", postMessage);
@@ -801,7 +834,7 @@ describe("WebLLM worker protocol", () => {
       );
       postMessage.mockClear();
 
-      for (const requestID of ["request-success", "request-failure"]) {
+      const sendTextGeneration = (requestID: string, prompt: string) => {
         send?.(
           new MessageEvent("message", {
             data: {
@@ -809,19 +842,109 @@ describe("WebLLM worker protocol", () => {
               payload: {
                 requestID,
                 apiKey: "",
-                prompt: "local prompt",
+                prompt,
                 temperature: 0,
               },
             },
           }),
         );
-        await vi.waitFor(() => expect(postMessage).toHaveBeenCalledTimes(1));
-        expect(postMessage.mock.calls[0][0]).toMatchObject({
-          payload: { requestID },
-        });
-        postMessage.mockClear();
-      }
+      };
+
+      sendTextGeneration("request-first", "first prompt");
+      sendTextGeneration("request-second", "second prompt");
+
+      await vi.waitFor(() => expect(createCompletion).toHaveBeenCalledTimes(1));
+      expect(createCompletion).toHaveBeenLastCalledWith({
+        messages: [{ role: "user", content: "first prompt" }],
+        n: 1,
+        max_gen_len: 2048,
+        temperature: 0,
+      });
+      expect(engine.resetChat).not.toHaveBeenCalled();
+
+      firstCompletion.resolve();
+      await vi.waitFor(() => expect(engine.resetChat).toHaveBeenCalledTimes(1));
+      expect(createCompletion).toHaveBeenCalledTimes(1);
+      firstReset.resolve();
+      await vi.waitFor(() => expect(createCompletion).toHaveBeenCalledTimes(2));
+      expect(createCompletion).toHaveBeenLastCalledWith({
+        messages: [{ role: "user", content: "second prompt" }],
+        n: 1,
+        max_gen_len: 2048,
+        temperature: 0,
+      });
+
+      secondCompletion.resolve();
+      await vi.waitFor(() => expect(engine.resetChat).toHaveBeenCalledTimes(2));
+      secondReset.resolve();
+      await vi.waitFor(() => expect(postMessage).toHaveBeenCalledTimes(2));
+
+      sendTextGeneration("request-failure", "failing prompt");
+      sendTextGeneration("request-recovery", "recovery prompt");
+      await vi.waitFor(() => expect(createCompletion).toHaveBeenCalledTimes(3));
+      await vi.waitFor(() => expect(engine.resetChat).toHaveBeenCalledTimes(3));
+      expect(createCompletion).toHaveBeenCalledTimes(3);
+      failingReset.resolve();
+      await vi.waitFor(() => expect(createCompletion).toHaveBeenCalledTimes(4));
+      expect(createCompletion).toHaveBeenLastCalledWith({
+        messages: [{ role: "user", content: "recovery prompt" }],
+        n: 1,
+        max_gen_len: 2048,
+        temperature: 0,
+      });
+
+      recoveryCompletion.resolve();
+      await vi.waitFor(() => expect(engine.resetChat).toHaveBeenCalledTimes(4));
+      recoveryReset.resolve();
+      await vi.waitFor(() => expect(postMessage).toHaveBeenCalledTimes(4));
+      expect(postMessage.mock.calls.map(([message]) => message)).toEqual([
+        {
+          command: "finishTextGen",
+          payload: {
+            requestID: "request-first",
+            apiKey: "",
+            result: "result:first prompt",
+            prompt: "first prompt",
+            detail: "",
+          },
+        },
+        {
+          command: "finishTextGen",
+          payload: {
+            requestID: "request-second",
+            apiKey: "",
+            result: "result:second prompt",
+            prompt: "second prompt",
+            detail: "",
+          },
+        },
+        {
+          command: "error",
+          payload: {
+            requestID: "request-failure",
+            originalCommand: "startTextGen",
+            message: "local failure",
+          },
+        },
+        {
+          command: "finishTextGen",
+          payload: {
+            requestID: "request-recovery",
+            apiKey: "",
+            result: "result:recovery prompt",
+            prompt: "recovery prompt",
+            detail: "",
+          },
+        },
+      ]);
     } finally {
+      firstCompletion.resolve();
+      secondCompletion.resolve();
+      recoveryCompletion.resolve();
+      firstReset.resolve();
+      secondReset.resolve();
+      failingReset.resolve();
+      recoveryReset.resolve();
       vi.doUnmock("@mlc-ai/web-llm");
     }
   });
