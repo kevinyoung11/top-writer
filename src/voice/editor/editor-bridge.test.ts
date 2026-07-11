@@ -290,6 +290,14 @@ describe("EditorBridge", () => {
     expect(bridge.getRevision()).toBe(beforeRevision);
     expect(undoDepth(editor.state)).toBe(beforeUndoDepth);
 
+    expect(bridge.undoLastVoiceEdit(preview.id)).toEqual({
+      ok: false,
+      reason: "invalid-range",
+    });
+    expect(editor.getJSON()).toEqual(beforeDoc);
+    expect(bridge.getRevision()).toBe(beforeRevision);
+    expect(undoDepth(editor.state)).toBe(beforeUndoDepth);
+
     const applied = expectOk(bridge.applyReplacement(preview.id));
 
     expect(applied).toEqual({
@@ -495,6 +503,18 @@ describe("EditorBridge", () => {
               : "equal",
       })),
     );
+    const afterApplyRevision = cleanBridge.getRevision();
+    const afterApplyUndoDepth = undoDepth(cleanEditor.state);
+    const afterApplyRedoDepth = redoDepth(cleanEditor.state);
+    expect(cleanBridge.applyReplacement(inverse.id)).toEqual({
+      ok: false,
+      reason: "invalid-range",
+    });
+    expect(cleanEditor.getJSON()).toEqual(afterDoc);
+    expect(cleanBridge.getRevision()).toBe(afterApplyRevision);
+    expect(undoDepth(cleanEditor.state)).toBe(afterApplyUndoDepth);
+    expect(redoDepth(cleanEditor.state)).toBe(afterApplyRedoDepth);
+
     expectOk(cleanBridge.undoLastVoiceEdit(inverse.id));
     expect(cleanEditor.getJSON()).toEqual(beforeDoc);
     expect(redo(cleanEditor.state, cleanEditor.view.dispatch)).toBe(true);

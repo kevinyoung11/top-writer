@@ -385,8 +385,12 @@ export class EditorBridge {
   applyReplacement(
     previewId: string,
   ): BridgeResult<{ beforeRevision: number; afterRevision: number }> {
-    const staged = this.consumePreview(previewId);
+    const staged = this.stagedPreviews.get(previewId);
     if (!staged) return failure("preview-not-found");
+    if (staged.snapshot.mode !== "rewrite") {
+      return failure("invalid-range");
+    }
+    this.stagedPreviews.delete(previewId);
     if (previewIntegrity(staged.source) !== staged.integrity) {
       return failure("invalid-range");
     }
@@ -502,14 +506,15 @@ export class EditorBridge {
   undoLastVoiceEdit(
     previewId: string,
   ): BridgeResult<{ beforeRevision: number; afterRevision: number }> {
-    const staged = this.consumePreview(previewId);
+    const staged = this.stagedPreviews.get(previewId);
+    if (!staged) return failure("preview-not-found");
     if (
-      !staged ||
-      staged.snapshot.id !== this.undoPreviewId ||
-      staged.snapshot.mode !== "undo"
+      staged.snapshot.mode !== "undo" ||
+      staged.snapshot.id !== this.undoPreviewId
     ) {
-      return failure("preview-not-found");
+      return failure("invalid-range");
     }
+    this.stagedPreviews.delete(previewId);
     this.undoPreviewId = null;
     if (previewIntegrity(staged.source) !== staged.integrity) {
       return failure("invalid-range");
@@ -537,12 +542,6 @@ export class EditorBridge {
     const afterRevision = this.getRevision();
     this.lastVoiceEdit = null;
     return success({ beforeRevision, afterRevision });
-  }
-
-  private consumePreview(previewId: string) {
-    const preview = this.stagedPreviews.get(previewId);
-    this.stagedPreviews.delete(previewId);
-    return preview;
   }
 
   private rangeMatchesDocument(range: VoiceRange) {
