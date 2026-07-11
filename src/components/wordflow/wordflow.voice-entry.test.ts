@@ -1,6 +1,8 @@
 /** @vitest-environment jsdom */
 
 import "fake-indexeddb/auto";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCopilotController } from "../../voice/voice-copilot-controller";
 import type { VoiceCopilotState } from "../../voice/types";
@@ -12,6 +14,20 @@ class WorkerStub extends EventTarget {
 
   postMessage() {}
   terminate() {}
+}
+
+let observerCallback: ResizeObserverCallback | undefined;
+let resizeObserverInstances: ResizeObserverStub[] = [];
+
+class ResizeObserverStub {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+
+  constructor(callback: ResizeObserverCallback) {
+    observerCallback = callback;
+    resizeObserverInstances.push(this);
+  }
 }
 
 function createMemoryStorage(): Storage {
@@ -74,6 +90,7 @@ describe("wordflow voice entry", () => {
   beforeAll(async () => {
     vi.stubGlobal("localStorage", createMemoryStorage());
     vi.stubGlobal("Worker", WorkerStub);
+    vi.stubGlobal("ResizeObserver", ResizeObserverStub);
     Object.defineProperty(document, "execCommand", {
       configurable: true,
       value: () => false
@@ -89,6 +106,8 @@ describe("wordflow voice entry", () => {
   });
 
   beforeEach(async () => {
+    observerCallback = undefined;
+    resizeObserverInstances = [];
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -240,5 +259,56 @@ describe("wordflow voice entry", () => {
       ?.querySelector<HTMLButtonElement>("[aria-label='关闭语音副驾']")
       ?.click();
     expect(controller.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("publishes the measured player height as a root CSS variable", async () => {
+    const controller = new FakeController();
+    root.voiceController = controller as unknown as VoiceCopilotController;
+    root.requestUpdate();
+    await root.updateComplete;
+
+    const player = root.shadowRoot?.querySelector("top-writer-voice-player")!;
+    const observer = resizeObserverInstances.at(-1)!;
+    expect(observer.observe).toHaveBeenCalledWith(player);
+
+    observerCallback?.(
+      [{ contentRect: { height: 84 } } as ResizeObserverEntry],
+      observer as unknown as ResizeObserver
+    );
+
+    const centerPanel = root.shadowRoot?.querySelector<HTMLElement>(".center-panel");
+    expect(centerPanel?.style.getPropertyValue("--voice-player-height")).toBe("84px");
+  });
+
+  it("disconnects the player observer when the root is removed", async () => {
+    const controller = new FakeController();
+    root.voiceController = controller as unknown as VoiceCopilotController;
+    root.requestUpdate();
+    await root.updateComplete;
+    const observer = resizeObserverInstances.at(-1)!;
+
+    root.remove();
+
+    expect(observer.disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("ships responsive drawer breakpoints without retaining desktop rails on mobile", async () => {
+    const [wordflowCSS, editorCSS, playerCSS] = await Promise.all([
+      readFile(resolve(process.cwd(), "src/components/wordflow/wordflow.css"), "utf8"),
+      readFile(resolve(process.cwd(), "src/components/text-editor/text-editor.css"), "utf8"),
+      readFile(resolve(process.cwd(), "src/components/voice-player/voice-player.css"), "utf8")
+    ]);
+
+    expect(wordflowCSS).toContain("@media (min-width: 1100px)");
+    expect(wordflowCSS).toContain("width: clamp(320px, 26vw, 400px)");
+    expect(wordflowCSS).toContain("@media (min-width: 700px) and (max-width: 1099px)");
+    expect(wordflowCSS).toContain("@media (max-width: 699px)");
+    expect(wordflowCSS).toContain("grid-template-columns: 0 minmax(0, 1fr) 0");
+    expect(wordflowCSS).toContain("inset: auto 0 var(--voice-player-height, 72px) 0");
+    expect(wordflowCSS).toContain("100dvh");
+    expect(wordflowCSS).toContain("env(safe-area-inset-bottom)");
+    expect(editorCSS).toContain("padding: 60px 16px");
+    expect(editorCSS).toContain("var(--voice-player-height, 72px)");
+    expect(playerCSS).toContain("env(safe-area-inset-bottom)");
   });
 });

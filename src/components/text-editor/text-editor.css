@@ -9,6 +9,13 @@
   position: relative;
 }
 
+@media (max-width: 699px) {
+  .text-editor-container {
+    min-height: 100dvh;
+    padding: 60px 16px calc(var(--voice-player-height, 72px) + env(safe-area-inset-bottom));
+  }
+}
+
 .text-editor {
   width: 100%;
   height: 100%;

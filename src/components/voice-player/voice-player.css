@@ -7,9 +7,13 @@
   background: white;
   color: var(--gray-700);
   font-size: var(--font-d1);
+  box-sizing: border-box;
+  max-width: 100%;
+  padding-bottom: env(safe-area-inset-bottom);
+  overflow-x: hidden;
 }
 
-section { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: center; padding: 10px 16px; }
+section { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: center; box-sizing: border-box; padding: 10px 16px; }
 .scope { min-width: 0; overflow-wrap: anywhere; }
 .controls { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; }
 button, select { border: 1px solid var(--gray-400); border-radius: 4px; background: white; color: inherit; font: inherit; }

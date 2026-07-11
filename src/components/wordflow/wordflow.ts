@@ -185,6 +185,8 @@ export class WordflowWordflow extends LitElement {
   private voiceController: VoiceCopilotController | null = null;
   private voiceBridge: EditorBridge | null = null;
   private readonly voicePreferences = new VoicePreferencesStore();
+  private voicePlayerResizeObserver: ResizeObserver | null = null;
+  private observedVoicePlayer: HTMLElement | null = null;
 
   // ===== Lifecycle Methods ======
   constructor() {
@@ -268,7 +270,33 @@ export class WordflowWordflow extends LitElement {
     }
   }
 
+  updated() {
+    const player = this.shadowRoot?.querySelector<HTMLElement>(
+      'top-writer-voice-player'
+    ) ?? null;
+    if (player === this.observedVoicePlayer) return;
+
+    this.voicePlayerResizeObserver?.disconnect();
+    this.voicePlayerResizeObserver = null;
+    this.observedVoicePlayer = player;
+
+    if (!player || typeof ResizeObserver === 'undefined') return;
+    this.voicePlayerResizeObserver = new ResizeObserver(entries => {
+      const height = entries[0]?.contentRect.height;
+      if (typeof height === 'number') {
+        this.centerPanelElement?.style.setProperty(
+          '--voice-player-height',
+          `${height}px`
+        );
+      }
+    });
+    this.voicePlayerResizeObserver.observe(player);
+  }
+
   disconnectedCallback() {
+    this.voicePlayerResizeObserver?.disconnect();
+    this.voicePlayerResizeObserver = null;
+    this.observedVoicePlayer = null;
     this.voiceController?.destroy();
     this.voiceController = null;
     this.voiceBridge?.destroy();
