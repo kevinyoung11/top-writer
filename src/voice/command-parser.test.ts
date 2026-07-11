@@ -230,6 +230,58 @@ describe("parseVoicePlan", () => {
     });
   });
 
+  it.each([
+    "改第5段和第6段",
+    "改第5段到第8段",
+    "把第5段落改得更直接",
+    "把第5段和第6段改得更直接",
+    "把第5段改成第6段",
+  ])("rejects an ambiguous numbered rewrite target in %s", (transcript) => {
+    expect(parseVoicePlan(transcript)).toMatchObject({
+      confidence: 0,
+      actions: [],
+    });
+  });
+
+  it.each(["改第5段，", "改第5段；"])(
+    "allows trailing punctuation after one numbered target in %s",
+    (transcript) => {
+      expect(parseVoicePlan(transcript).actions[0]).toMatchObject({
+        intent: "rewrite",
+        scope: { kind: "paragraph", index: 4 },
+      });
+    },
+  );
+
+  it.each([
+    "把“第5段”改成“第6段”",
+    '把"第5段"改成"第6段"',
+    "把『第5段』改成『第6段』",
+  ])(
+    "keeps quoted paragraph text as an effective rewrite in %s",
+    (transcript) => {
+      expect(parseVoicePlan(transcript).actions).toEqual([
+        {
+          intent: "rewrite",
+          scope: { kind: "effective" },
+          constraints: [transcript],
+        },
+      ]);
+    },
+  );
+
+  it("allows a quoted replacement after one explicit paragraph target", () => {
+    const transcript = "把第5段改成“第6段”";
+
+    expect(parseVoicePlan(transcript).actions).toEqual([
+      {
+        intent: "rewrite",
+        scope: { kind: "paragraph", index: 4 },
+        constraints: [transcript],
+      },
+    ]);
+  });
+
   it.each(["调整型基金风险很高", "压缩空气储能很重要", "精简版已经发布"])(
     "does not treat a rewrite-verb noun prefix as a command: %s",
     (transcript) => {

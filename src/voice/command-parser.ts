@@ -98,12 +98,37 @@ const rewriteTarget = (text: string) => {
   return target;
 };
 
+const stripQuotedText = (value: string) =>
+  value.replace(/“[^”]*”|‘[^’]*’|"[^"]*"|'[^']*'|「[^」]*」|『[^』]*』/gu, "");
+
+const directNumberedTargetTailPattern = /^[\s，,；;。！？!?]*$/u;
+const constructionNumberedTargetTailPattern =
+  /^[\s，,；;。！？!?]*(?:改写|改得|改成|改为|改|润色|调整|压缩|精简)[\s\S]*$/u;
+
 const rewriteScope = (text: string): VoiceScope | null => {
   const target = rewriteTarget(text);
 
   if (target.startsWith("第")) {
     const numbered = target.match(/^第\s*([\s\S]*?)\s*段/);
-    return numbered ? paragraphScope(numbered[1]) : null;
+    if (!numbered) return null;
+
+    const scope = paragraphScope(numbered[1]);
+    if (!scope) return null;
+
+    const remainder = target.slice(numbered[0].length);
+    const construction = /^(?:请\s*)?(?:把|将)/u.test(text);
+    if (construction) {
+      if (
+        !constructionNumberedTargetTailPattern.test(remainder) ||
+        /第[\s\S]*?段/u.test(stripQuotedText(remainder))
+      ) {
+        return null;
+      }
+    } else if (!directNumberedTargetTailPattern.test(remainder)) {
+      return null;
+    }
+
+    return scope;
   }
   if (/^选中/.test(target)) return { kind: "selection" };
   if (/^(?:上一段|前一段)/.test(target)) return { kind: "previous" };
