@@ -11,6 +11,15 @@ import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { WordflowTextEditor } from '../text-editor/text-editor';
 import { v4 as uuidv4, validate } from 'uuid';
 import { config } from '../../config/config';
+import { PRODUCT_NAME } from '../../config/brand';
+import { TextGenerationService } from '../../llms/text-generation-service';
+import { EditorBridge } from '../../voice/editor/editor-bridge';
+import { VoicePreferencesStore } from '../../voice/preferences';
+import { RewriteService } from '../../voice/rewrite-service';
+import { SemanticLocator } from '../../voice/semantic-locator';
+import { BrowserSpeechRecognizer } from '../../voice/speech/browser-recognizer';
+import { BrowserSpeechSynthesizer } from '../../voice/speech/browser-synthesizer';
+import { VoiceCopilotController } from '../../voice/voice-copilot-controller';
 import { PromptManager } from './prompt-manager';
 import { RemotePromptManager } from './remote-prompt-manager';
 import { UserConfigManager, UserConfig } from './user-config';
@@ -35,7 +44,6 @@ import type { NightjarToast } from '../toast/toast';
 import type { PrivacyDialog } from '../privacy-dialog/privacy-dialog';
 import type { PrivacyDialogSimple } from '../privacy-dialog/privacy-dialog-simple';
 import type { WordflowSettingWindow } from '../setting-window/setting-window';
-import type { TextGenLocalWorkerMessage } from '../../llms/web-llm';
 
 // Components
 import '../toast/toast';
@@ -45,6 +53,8 @@ import '../floating-menu/floating-menu';
 import '../setting-window/setting-window';
 import '../privacy-dialog/privacy-dialog';
 import '../privacy-dialog/privacy-dialog-simple';
+import '../voice-player/voice-player';
+import '../voice-copilot/voice-copilot';
 
 // Assets
 import componentCSS from './wordflow.css?inline';
@@ -153,6 +163,10 @@ export class WordflowWordflow extends LitElement {
   lastUpdateSidebarMenuProps: UpdateSidebarMenuProps | null = null;
 
   textGenLocalWorker: Worker;
+  textGenerationService: TextGenerationService;
+  private voiceController: VoiceCopilotController | null = null;
+  private voiceBridge: EditorBridge | null = null;
+  private readonly voicePreferences = new VoicePreferencesStore();
 
   // ===== Lifecycle Methods ======
   constructor() {
@@ -225,12 +239,40 @@ export class WordflowWordflow extends LitElement {
 
     // Initialize the local llm worker
     this.textGenLocalWorker = new TextGenLocalWorkerInline();
+    this.textGenerationService = new TextGenerationService({
+      worker: this.textGenLocalWorker
+    });
   }
 
   firstUpdated() {
     if (this.workflowElement === undefined) {
       throw Error('workflowElement undefined.');
     }
+  }
+
+  disconnectedCallback() {
+    this.voiceController?.destroy();
+    this.voiceController = null;
+    this.voiceBridge?.destroy();
+    this.voiceBridge = null;
+    this.textGenerationService.destroy();
+    super.disconnectedCallback();
+  }
+
+  private voiceEditorReadyHandler(event: CustomEvent<EditorBridge>) {
+    const bridge = event.detail;
+    if (this.voiceController || !bridge) return;
+    this.voiceBridge = bridge;
+    this.voiceController = new VoiceCopilotController({
+      recognizer: new BrowserSpeechRecognizer(),
+      synthesizer: new BrowserSpeechSynthesizer(),
+      editor: bridge,
+      locator: new SemanticLocator(this.textGenerationService),
+      rewriter: new RewriteService(this.textGenerationService),
+      preferences: this.voicePreferences,
+      getModelContext: () => ({ userConfig: this.userConfig, userID: this.initUserID() })
+    });
+    this.requestUpdate();
   }
 
   /**
@@ -519,7 +561,7 @@ export class WordflowWordflow extends LitElement {
               target="_blank"
             >
               <span class="svg-icon">${unsafeHTML(logoIcon)}</span>
-              <span class="name">Wordflow</span>
+              <span class="name">${PRODUCT_NAME}</span>
             </a>
           </div>
         </div>
@@ -532,7 +574,8 @@ export class WordflowWordflow extends LitElement {
               .updateSidebarMenu=${this.updateSidebarMenu}
               .promptManager=${this.promptManager}
               .userConfig=${this.userConfig}
-              .textGenLocalWorker=${this.textGenLocalWorker}
+              .textGenerationService=${this.textGenerationService}
+              @editor-bridge-ready=${(event: CustomEvent<EditorBridge>) => this.voiceEditorReadyHandler(event)}
               @loading-finished=${() => this.textEditorLoadingFinishedHandler()}
               @show-toast=${(e: CustomEvent<ToastMessage>) => {
                 this.toastMessage = e.detail.message;
@@ -541,10 +584,12 @@ export class WordflowWordflow extends LitElement {
               }}
             ></wordflow-text-editor>
           </div>
+          ${this.voiceController ? html`<top-writer-voice-player .controller=${this.voiceController}></top-writer-voice-player>` : null}
         </div>
 
         <div class="right-panel">
           <div class="top-padding"></div>
+          ${this.voiceController ? html`<top-writer-voice-copilot .controller=${this.voiceController} .preferences=${this.voicePreferences}></top-writer-voice-copilot>` : null}
           <div class="footer-info">
             <a
               class="row"

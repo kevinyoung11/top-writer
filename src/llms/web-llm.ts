@@ -115,6 +115,7 @@ const initProgressCallback = (report: webllm.InitProgressReport) => {
 };
 
 let engine: Promise<webllm.EngineInterface> | null = null;
+let textGenerationQueue: Promise<void> = Promise.resolve();
 
 //==========================================================================||
 //                          Worker Event Handlers                           ||
@@ -132,7 +133,11 @@ self.onmessage = (e: MessageEvent<TextGenLocalWorkerMessage>) => {
     }
 
     case 'startTextGen': {
-      startTextGen(e.data.payload.prompt, e.data.payload.temperature);
+      enqueueTextGen(
+        e.data.payload.requestID,
+        e.data.payload.prompt,
+        e.data.payload.temperature
+      );
       break;
     }
 
@@ -198,29 +203,39 @@ const startLoadModel = async (
 
 /**
  * Use Web LLM to generate text based on a given prompt
+ * @param requestID Request ID to echo to the caller
  * @param prompt Prompt to give to the PaLM model
  * @param temperature Model temperature
  */
-const startTextGen = async (prompt: string, temperature: number) => {
+const startTextGen = async (
+  requestID: string,
+  prompt: string,
+  temperature: number
+) => {
   try {
     const curEngine = await engine!;
-    const response = await curEngine.chat.completions.create({
-      messages: [{ role: 'user', content: prompt }],
-      n: 1,
-      max_gen_len: 2048,
-      // Override temperature to 0 because local models are very unstable
-      temperature: 0
-      // logprobs: false
-    });
-
-    // Reset the chat cache to avoid memorizing previous messages
-    await curEngine.resetChat();
+    const response = await (async () => {
+      try {
+        return await curEngine.chat.completions.create({
+          messages: [{ role: 'user', content: prompt }],
+          n: 1,
+          max_gen_len: 2048,
+          // Override temperature to 0 because local models are very unstable
+          temperature: 0
+          // logprobs: false
+        });
+      } finally {
+        // Reset the chat cache even after a failed request so the next queued
+        // request cannot inherit partial state from this generation.
+        await curEngine.resetChat();
+      }
+    })();
 
     // Send back the data to the main thread
     const message: TextGenLocalWorkerMessage = {
       command: 'finishTextGen',
       payload: {
-        requestID: 'web-llm',
+        requestID,
         apiKey: '',
         result: response.choices[0].message.content || '',
         prompt: prompt,
@@ -233,13 +248,28 @@ const startTextGen = async (prompt: string, temperature: number) => {
     const message: TextGenLocalWorkerMessage = {
       command: 'error',
       payload: {
-        requestID: 'web-llm',
+        requestID,
         originalCommand: 'startTextGen',
-        message: error as string
+        message: error instanceof Error ? error.message : String(error)
       }
     };
     postMessage(message);
   }
+};
+
+/**
+ * WebLLM keeps one mutable chat cache, so a generation and its reset must run
+ * as one FIFO task. Keep unexpected task failures from poisoning later work.
+ */
+const enqueueTextGen = (
+  requestID: string,
+  prompt: string,
+  temperature: number
+) => {
+  const task = textGenerationQueue.then(() =>
+    startTextGen(requestID, prompt, temperature)
+  );
+  textGenerationQueue = task.catch(() => undefined);
 };
 
 //==========================================================================||

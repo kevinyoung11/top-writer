@@ -77,8 +77,21 @@ export const textGenGpt = async (
   model: GptModel,
   useCache: boolean = false,
   stopSequences: string[] = [],
-  detail: string = ''
-) => {
+  detail: string = '',
+  signal?: AbortSignal
+): Promise<TextGenMessage> => {
+  if (signal?.aborted) {
+    const message: TextGenMessage = {
+      command: 'error',
+      payload: {
+        requestID,
+        originalCommand: 'startTextGen',
+        message: 'aborted'
+      }
+    };
+    return message;
+  }
+
   const body: ResponsesCompletionRequest = {
     model,
     input: prompt
@@ -95,6 +108,16 @@ export const textGenGpt = async (
   if (useCache && cachedValue !== null) {
     console.log('Use cached output (text gen)');
     await new Promise(resolve => setTimeout(resolve, 1000));
+    if (signal?.aborted) {
+      return {
+        command: 'error',
+        payload: {
+          requestID,
+          originalCommand: 'startTextGen',
+          message: 'aborted'
+        }
+      };
+    }
     // await new Promise(resolve => setTimeout(resolve, 100000));
     const message: TextGenMessage = {
       command: 'finishTextGen',
@@ -117,7 +140,8 @@ export const textGenGpt = async (
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   };
 
   try {
@@ -128,6 +152,7 @@ export const textGenGpt = async (
     }
 
     const result = extractResponseText(data);
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
 
     // Send back the data to the main thread
     const message: TextGenMessage = {
@@ -147,7 +172,13 @@ export const textGenGpt = async (
     }
     return message;
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorMessage =
+      signal?.aborted ||
+      (error instanceof Error && error.name === 'AbortError')
+        ? 'aborted'
+        : error instanceof Error
+          ? error.message
+          : String(error);
 
     // Throw the error to the main thread
     const message: TextGenMessage = {

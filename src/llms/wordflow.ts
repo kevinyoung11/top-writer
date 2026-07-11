@@ -31,13 +31,35 @@ export const textGenWordflow = async (
   userID: string,
   model: keyof typeof SupportedRemoteModel | keyof typeof SupportedLocalModel,
   useCache: boolean = false,
-  detail: string = ''
+  detail: string = '',
+  signal?: AbortSignal
 ): Promise<TextGenMessage> => {
+  if (signal?.aborted) {
+    return {
+      command: 'error',
+      payload: {
+        requestID,
+        originalCommand: 'startTextGen',
+        message: 'aborted'
+      }
+    };
+  }
+
   // Check if the model output is cached
   const cachedValue = localStorage.getItem('[wordflow]' + prompt + inputText);
   if (useCache && cachedValue !== null) {
     console.log('Use cached output (text gen)');
     await new Promise(resolve => setTimeout(resolve, 1000));
+    if (signal?.aborted) {
+      return {
+        command: 'error',
+        payload: {
+          requestID,
+          originalCommand: 'startTextGen',
+          message: 'aborted'
+        }
+      };
+    }
     const message: TextGenMessage = {
       command: 'finishTextGen',
       payload: {
@@ -69,7 +91,8 @@ export const textGenWordflow = async (
       'Content-Type': 'application/json'
     },
     credentials: 'include',
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   };
 
   try {
@@ -92,6 +115,7 @@ export const textGenWordflow = async (
     }
 
     const successData = data as PromptRunSuccessResponse;
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
     // Send back the data to the main thread
     const message: TextGenMessage = {
       command: 'finishTextGen',
@@ -116,13 +140,20 @@ export const textGenWordflow = async (
 
     return message;
   } catch (error) {
+    const errorMessage =
+      signal?.aborted ||
+      (error instanceof Error && error.name === 'AbortError')
+        ? 'aborted'
+        : error instanceof Error
+          ? error.message
+          : String(error);
     // Throw the error to the main thread
     const message: TextGenMessage = {
       command: 'error',
       payload: {
         requestID: requestID,
         originalCommand: 'startTextGen',
-        message: error as string
+        message: errorMessage
       }
     };
     return message;

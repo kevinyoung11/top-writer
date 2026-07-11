@@ -3,13 +3,9 @@ import { css, html, LitElement, PropertyValues, unsafeCSS } from 'lit';
 import { customElement, property, query, state } from 'lit/decorators.js';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { config } from '../../config/config';
-import { textGenGemini } from '../../llms/gemini';
-import { textGenGpt } from '../../llms/gpt';
 import { textGenWordflow } from '../../llms/wordflow';
 import '../modal-auth/modal-auth';
 import {
-  ModelFamily,
-  SupportedLocalModel,
   supportedModelReverseLookup,
   SupportedRemoteModel,
   UserConfig
@@ -34,10 +30,12 @@ import { SidebarMenu } from './sidebar-menu-plugin';
 // Types
 import type { ResolvedPos } from '@tiptap/pm/model';
 import type { EditorView } from '@tiptap/pm/view';
-import type { GptModel, TextGenMessage } from '../../llms/gpt';
-import type { TextGenLocalWorkerMessage } from '../../llms/web-llm';
+import type { TextGenerationService } from '../../llms/text-generation-service';
+import type { TextGenMessage } from '../../llms/gpt';
 import type { PromptModel, SimpleEventMessage } from '../../types/common-types';
 import type { PromptDataLocal } from '../../types/wordflow';
+import { EditorBridge } from '../../voice/editor/editor-bridge';
+import { VoiceHighlightExtension } from '../../voice/editor/voice-highlight-extension';
 import type { PromptManager } from '../wordflow/prompt-manager';
 import type {
   ToastMessage,
@@ -86,10 +84,7 @@ export class WordflowTextEditor extends LitElement {
   userConfig!: UserConfig;
 
   @property({ attribute: false })
-  textGenLocalWorker!: Worker;
-  textGenLocalWorkerResolve = (
-    value: TextGenMessage | PromiseLike<TextGenMessage>
-  ) => {};
+  textGenerationService!: TextGenerationService;
 
   @query('.text-editor-container')
   containerElement: HTMLElement | undefined;
@@ -97,13 +92,12 @@ export class WordflowTextEditor extends LitElement {
   @query('.text-editor')
   editorElement: HTMLElement | undefined;
 
-  @query('.select-menu')
-  selectMenuElement: HTMLElement | undefined;
-
   @state()
   isHoveringFloatingMenu = false;
 
   editor: Editor | null = null;
+  private editorBridge: EditorBridge | null = null;
+  private detachedEditorContent: JSONContent | null = null;
   curEditID = 0;
 
   containerBBox: DOMRect = {
@@ -125,9 +119,25 @@ export class WordflowTextEditor extends LitElement {
     super();
   }
 
-  firstUpdated() {
-    this.initEditor();
+  connectedCallback() {
+    super.connectedCallback();
+    void this.updateComplete.then(() => {
+      if (this.isConnected && this.editor === null) this.initEditor();
+    });
+  }
 
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this.editor !== null) {
+      this.detachedEditorContent = this.editor.getJSON();
+    }
+    this.editorBridge?.destroy();
+    this.editorBridge = null;
+    this.editor?.destroy();
+    this.editor = null;
+  }
+
+  firstUpdated() {
     // Initialize the floating menu's position
     if (this.floatingMenuBox === undefined) {
       console.error(
@@ -149,19 +159,13 @@ export class WordflowTextEditor extends LitElement {
       }
     });
 
-    // Add event listener to the local text gen worker
-    this.textGenLocalWorker.addEventListener(
-      'message',
-      (e: MessageEvent<TextGenLocalWorkerMessage>) => {
-        this.textGenLocalWorkerMessageHandler(e);
-      }
-    );
   }
 
   initEditor() {
+    if (this.editor !== null) return;
+
     if (
       this.editorElement === undefined ||
-      this.selectMenuElement === undefined ||
       this.containerElement === undefined ||
       this.floatingMenuBox === undefined ||
       this.popperSidebarBox === undefined ||
@@ -238,22 +242,26 @@ export class WordflowTextEditor extends LitElement {
     // Show welcome text if the user has never run a prompt
     let defaultText: string | JSONContent = '';
 
-    // Try to restore the last session's content
-    const lastEditorContent = localStorage.getItem('last-editor-content');
-    if (lastEditorContent !== null) {
-      defaultText = JSON.parse(lastEditorContent) as JSONContent;
-    }
-
-    const hasRunAPrompt = localStorage.getItem('has-run-a-prompt');
-    if (hasRunAPrompt === null) {
-      defaultText = `${WELCOME_TEXT}`;
+    if (this.detachedEditorContent !== null) {
+      defaultText = this.detachedEditorContent;
     } else {
-      // TODO: Safari web app can't save to local storage before window close
-      defaultText = '';
-    }
+      // Try to restore the last session's content
+      const lastEditorContent = localStorage.getItem('last-editor-content');
+      if (lastEditorContent !== null) {
+        defaultText = JSON.parse(lastEditorContent) as JSONContent;
+      }
 
-    if (DEV_MODE) {
-      defaultText = `${WELCOME_TEXT}`;
+      const hasRunAPrompt = localStorage.getItem('has-run-a-prompt');
+      if (hasRunAPrompt === null) {
+        defaultText = `${WELCOME_TEXT}`;
+      } else {
+        // TODO: Safari web app can't save to local storage before window close
+        defaultText = '';
+      }
+
+      if (DEV_MODE) {
+        defaultText = `${WELCOME_TEXT}`;
+      }
     }
 
     const myPlaceholder = Placeholder.configure({
@@ -271,11 +279,21 @@ export class WordflowTextEditor extends LitElement {
         Collapse,
         mySidebarMenu,
         myEventHandler,
-        myPlaceholder
+        myPlaceholder,
+        VoiceHighlightExtension
       ],
       content: defaultText,
       autofocus: true
     });
+
+    this.editorBridge = new EditorBridge(this.editor);
+    this.dispatchEvent(
+      new CustomEvent<EditorBridge>('editor-bridge-ready', {
+        bubbles: true,
+        composed: true,
+        detail: this.editorBridge
+      })
+    );
   }
 
   /**
@@ -288,6 +306,10 @@ export class WordflowTextEditor extends LitElement {
   //                              Custom Methods                              ||
   //==========================================================================||
   async initData() {}
+
+  getVoiceEditorBridge() {
+    return this.editorBridge;
+  }
 
   diffParagraph(oldText: string, newText: string) {
     // const differences = diff_wordMode_(oldText, newText);
@@ -631,45 +653,6 @@ export class WordflowTextEditor extends LitElement {
   //==========================================================================||
   //                               Event Handlers                             ||
   //==========================================================================||
-  /**
-   * Event handler for the text gen local worker
-   * @param e Text gen message
-   */
-  textGenLocalWorkerMessageHandler(e: MessageEvent<TextGenLocalWorkerMessage>) {
-    switch (e.data.command) {
-      case 'finishTextGen': {
-        const message: TextGenMessage = {
-          command: 'finishTextGen',
-          payload: e.data.payload
-        };
-        this.textGenLocalWorkerResolve(message);
-        break;
-      }
-
-      case 'progressLoadModel': {
-        break;
-      }
-
-      case 'finishLoadModel': {
-        break;
-      }
-
-      case 'error': {
-        const message: TextGenMessage = {
-          command: 'error',
-          payload: e.data.payload
-        };
-        this.textGenLocalWorkerResolve(message);
-        break;
-      }
-
-      default: {
-        console.error('Worker: unknown message', e.data.command);
-        break;
-      }
-    }
-  }
-
   sidebarMenuFooterButtonClickedHandler(e: CustomEvent<string>) {
     switch (e.detail) {
       case 'accept': {
@@ -953,93 +936,46 @@ export class WordflowTextEditor extends LitElement {
    * Run the given prompt using the preferred model
    * @returns A promise of the prompt inference
    */
-  _runPrompt(promptData: PromptDataLocal, inputText: string) {
+  async _runPrompt(
+    promptData: PromptDataLocal,
+    inputText: string,
+    signal?: AbortSignal
+  ): Promise<TextGenMessage> {
     const curPrompt = this._formatPrompt(
       promptData.prompt,
       inputText,
       INPUT_TEXT_PLACEHOLDER
     );
 
-    let runRequest: Promise<TextGenMessage>;
-
-    switch (this.userConfig.preferredLLM) {
-      case SupportedRemoteModel['gpt-5-nano-free']: {
-        runRequest = textGenWordflow(
-          'text-gen',
-          promptData.prompt,
-          inputText,
-          promptData.temperature,
-          promptData.userID,
-          'gpt-5-nano-free',
-          USE_CACHE
-        );
-        break;
-      }
-
-      case SupportedRemoteModel['gpt-5.4']:
-      case SupportedRemoteModel['gpt-5.4-pro']:
-      case SupportedRemoteModel['gpt-5.4-mini']:
-      case SupportedRemoteModel['gpt-5.4-nano']:
-      case SupportedRemoteModel['gpt-5-mini']:
-      case SupportedRemoteModel['gpt-5-nano']:
-      case SupportedRemoteModel['gpt-5']:
-      case SupportedRemoteModel['gpt-4.1']: {
-        runRequest = textGenGpt(
-          this.userConfig.llmAPIKeys[ModelFamily.openAI],
-          'text-gen',
-          curPrompt,
-          promptData.temperature,
-          supportedModelReverseLookup[this.userConfig.preferredLLM] as GptModel,
-          USE_CACHE
-        );
-        break;
-      }
-
-      case SupportedRemoteModel['gemini-pro']: {
-        runRequest = textGenGemini(
-          this.userConfig.llmAPIKeys[ModelFamily.google],
-          'text-gen',
-          curPrompt,
-          promptData.temperature,
-          USE_CACHE
-        );
-        break;
-      }
-
-      // case SupportedLocalModel['mistral-7b-v0.2']:
-      case SupportedLocalModel['gemma-2b']:
-      case SupportedLocalModel['phi-2']:
-      case SupportedLocalModel['llama-2-7b']:
-      case SupportedLocalModel['tinyllama-1.1b']: {
-        runRequest = new Promise<TextGenMessage>(resolve => {
-          this.textGenLocalWorkerResolve = resolve;
-        });
-        const message: TextGenLocalWorkerMessage = {
-          command: 'startTextGen',
-          payload: {
-            apiKey: '',
-            prompt: curPrompt,
-            requestID: '',
-            temperature: promptData.temperature
-          }
-        };
-        this.textGenLocalWorker.postMessage(message);
-        break;
-      }
-
-      default: {
-        console.error('Unknown case ', this.userConfig.preferredLLM);
-        runRequest = textGenGpt(
-          this.userConfig.llmAPIKeys[ModelFamily.openAI],
-          'text-gen',
-          curPrompt,
-          promptData.temperature,
-          'gpt-5.4-mini',
-          USE_CACHE
-        );
-      }
+    try {
+      const result = await this.textGenerationService.generate({
+        prompt: curPrompt,
+        temperature: promptData.temperature,
+        userConfig: this.userConfig,
+        userID: localStorage.getItem('user-id') ?? '',
+        signal,
+        useCache: USE_CACHE
+      });
+      return {
+        command: 'finishTextGen',
+        payload: {
+          requestID: 'text-gen',
+          apiKey: '',
+          result,
+          prompt: curPrompt,
+          detail: ''
+        }
+      };
+    } catch (error) {
+      return {
+        command: 'error',
+        payload: {
+          requestID: 'text-gen',
+          originalCommand: 'startTextGen',
+          message: error instanceof Error ? error.message : String(error)
+        }
+      };
     }
-    return runRequest;
   }
 
   /**
