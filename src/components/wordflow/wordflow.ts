@@ -284,7 +284,7 @@ export class WordflowWordflow extends LitElement {
     this.voicePlayerResizeObserver = new ResizeObserver(entries => {
       const height = entries[0]?.contentRect.height;
       if (typeof height === 'number') {
-        this.centerPanelElement?.style.setProperty(
+        this.workflowElement?.style.setProperty(
           '--voice-player-height',
           `${height}px`
         );

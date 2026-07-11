@@ -24,7 +24,7 @@ button:focus-visible, select:focus-visible { outline: 2px solid var(--blue-500);
 label { display: inline-flex; gap: 4px; align-items: center; }
 select { padding: 3px; }
 
-@media (max-width: 700px) {
+@media (max-width: 699px) {
   section { grid-template-columns: 1fr; padding: 8px 12px; }
   .controls { justify-content: space-between; }
 }

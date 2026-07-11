@@ -55,6 +55,16 @@ function createMemoryStorage(): Storage {
   };
 }
 
+function inheritedCSSVariable(element: HTMLElement, name: string): string {
+  let current: HTMLElement | null = element;
+  while (current) {
+    const value = current.style.getPropertyValue(name);
+    if (value) return value;
+    current = current.parentElement;
+  }
+  return "";
+}
+
 const state = (phase: VoiceCopilotState["phase"]): VoiceCopilotState => ({
   phase,
   documentReady: true,
@@ -267,6 +277,11 @@ describe("wordflow voice entry", () => {
     root.requestUpdate();
     await root.updateComplete;
 
+    root.shadowRoot
+      ?.querySelector<HTMLButtonElement>("[data-voice-entry]")
+      ?.click();
+    await root.updateComplete;
+
     const player = root.shadowRoot?.querySelector("top-writer-voice-player")!;
     const observer = resizeObserverInstances.at(-1)!;
     expect(observer.observe).toHaveBeenCalledWith(player);
@@ -276,8 +291,14 @@ describe("wordflow voice entry", () => {
       observer as unknown as ResizeObserver
     );
 
-    const centerPanel = root.shadowRoot?.querySelector<HTMLElement>(".center-panel");
-    expect(centerPanel?.style.getPropertyValue("--voice-player-height")).toBe("84px");
+    const wordflow = root.shadowRoot?.querySelector<HTMLElement>(".wordflow");
+    const drawer = root.shadowRoot?.querySelector<HTMLElement>("#voice-copilot-drawer");
+    const entry = root.shadowRoot?.querySelector<HTMLElement>("[data-voice-entry]");
+    expect(wordflow?.style.getPropertyValue("--voice-player-height")).toBe("84px");
+    expect(wordflow?.contains(drawer!)).toBe(true);
+    expect(wordflow?.contains(entry!)).toBe(true);
+    expect(inheritedCSSVariable(drawer!, "--voice-player-height")).toBe("84px");
+    expect(inheritedCSSVariable(entry!, "--voice-player-height")).toBe("84px");
   });
 
   it("disconnects the player observer when the root is removed", async () => {
@@ -310,5 +331,6 @@ describe("wordflow voice entry", () => {
     expect(editorCSS).toContain("padding: 60px 16px");
     expect(editorCSS).toContain("var(--voice-player-height, 72px)");
     expect(playerCSS).toContain("env(safe-area-inset-bottom)");
+    expect(playerCSS).toContain("@media (max-width: 699px)");
   });
 });
