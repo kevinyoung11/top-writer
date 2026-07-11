@@ -239,12 +239,8 @@ export class EditorBridge {
   private undoPreviewId: string | null = null;
   private lastObservedRevision = 0;
   private destroyed = false;
-  private readonly transactionListener = ({
-    transaction,
-  }: {
-    transaction: { docChanged: boolean };
-  }) => {
-    if (this.destroyed || !transaction.docChanged) return;
+  private readonly transactionListener = () => {
+    if (this.destroyed) return;
 
     const revision = this.getRevision();
     if (revision <= this.lastObservedRevision) return;
@@ -358,6 +354,8 @@ export class EditorBridge {
     channel: VoiceHighlightChannel,
     range: VoiceRange | null,
   ): BridgeResult<void> {
+    if (this.destroyed) return failure("invalid-range");
+
     if (range === null) {
       setVoiceHighlight(this.editor, channel, null);
       return success(undefined);
@@ -375,11 +373,13 @@ export class EditorBridge {
   }
 
   stagePreview(preview: RewritePreview): BridgeResult<void> {
+    if (this.destroyed) return failure("invalid-range");
     if (preview.mode !== "rewrite") return failure("invalid-range");
     return this.storePreview(preview);
   }
 
   discardPreview(previewId: string): BridgeResult<void> {
+    if (this.destroyed) return failure("preview-not-found");
     if (!this.stagedPreviews.delete(previewId)) {
       return failure("preview-not-found");
     }
@@ -434,6 +434,8 @@ export class EditorBridge {
   applyReplacement(
     previewId: string,
   ): BridgeResult<{ beforeRevision: number; afterRevision: number }> {
+    if (this.destroyed) return failure("preview-not-found");
+
     const staged = this.stagedPreviews.get(previewId);
     if (!staged) return failure("preview-not-found");
     if (staged.snapshot.mode !== "rewrite") {
@@ -485,6 +487,9 @@ export class EditorBridge {
     this.editor.view.dispatch(transaction);
 
     const afterRevision = this.getRevision();
+    if (this.destroyed) {
+      return success({ beforeRevision, afterRevision });
+    }
     const afterDoc = this.editor.state.doc;
     const paragraphs = this.getSnapshot().paragraphs;
     const paragraphIndexes = this.paragraphIndexesForRange(
@@ -515,6 +520,8 @@ export class EditorBridge {
   }
 
   previewUndoLastVoiceEdit(): BridgeResult<RewritePreview> {
+    if (this.destroyed) return failure("nothing-to-undo");
+
     const edit = this.lastVoiceEdit;
     if (!edit) return failure("nothing-to-undo");
     if (
@@ -555,6 +562,8 @@ export class EditorBridge {
   undoLastVoiceEdit(
     previewId: string,
   ): BridgeResult<{ beforeRevision: number; afterRevision: number }> {
+    if (this.destroyed) return failure("preview-not-found");
+
     const staged = this.stagedPreviews.get(previewId);
     if (!staged) return failure("preview-not-found");
     if (

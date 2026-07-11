@@ -3,7 +3,7 @@
 import { Editor } from "@tiptap/core";
 import Paragraph from "@tiptap/extension-paragraph";
 import { redo, redoDepth, undo, undoDepth } from "@tiptap/pm/history";
-import { TextSelection } from "@tiptap/pm/state";
+import { Plugin, TextSelection } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Collapse } from "../../components/text-editor/collapse-node";
@@ -533,6 +533,108 @@ describe("EditorBridge", () => {
     expect(secondListenerRevisions).toEqual([2]);
 
     bridge.destroy();
+  });
+
+  it("notifies when an appended transaction changes a metadata-only root transaction", () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+    const deliveredRevisions: number[] = [];
+    const rootTransactionChanges: boolean[] = [];
+    let hasAppended = false;
+    const appendDocumentChangeMeta = "append-document-change";
+
+    editor.registerPlugin(
+      new Plugin({
+        appendTransaction(transactions, _oldState, newState) {
+          if (
+            hasAppended ||
+            !transactions.some((transaction) =>
+              transaction.getMeta(appendDocumentChangeMeta),
+            )
+          ) {
+            return null;
+          }
+          hasAppended = true;
+          return newState.tr.insertText("附加", 1);
+        },
+      }),
+    );
+    editor.on("transaction", ({ transaction }) => {
+      rootTransactionChanges.push(transaction.docChanged);
+    });
+    bridge.onRevisionChange((revision) => {
+      deliveredRevisions.push(revision);
+    });
+
+    editor.view.dispatch(
+      editor.state.tr.setMeta(appendDocumentChangeMeta, true),
+    );
+
+    expect(rootTransactionChanges).toEqual([false]);
+    expect(editor.getText()).toContain("附加");
+    expect(bridge.getRevision()).toBe(1);
+    expect(deliveredRevisions).toEqual([1]);
+
+    bridge.destroy();
+  });
+
+  it("does not recreate preview state when destroyed during voice apply", () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+    const rewrite = makePreview(
+      rangeForParagraph(bridge, 1),
+      "销毁中的改写仍可完成",
+      "destroy-during-apply",
+    );
+    let transactionCount = 0;
+
+    editor.on("transaction", () => {
+      transactionCount += 1;
+    });
+    bridge.onRevisionChange(() => {
+      bridge.destroy();
+    });
+    expectOk(bridge.stagePreview(rewrite));
+
+    expect(() => expectOk(bridge.applyReplacement(rewrite.id))).not.toThrow();
+    expect(bridge.getRevision()).toBe(1);
+    expect(bridge.getSnapshot().paragraphs[1].text).toBe(
+      rewrite.replacementText,
+    );
+    const documentAfterApply = editor.getJSON();
+    const transactionsAfterApply = transactionCount;
+    const destroyedPreview = makePreview(
+      rangeForParagraph(bridge, 0),
+      "销毁后不能暂存",
+      "destroyed-preview",
+    );
+
+    expect(bridge.previewUndoLastVoiceEdit()).toEqual({
+      ok: false,
+      reason: "nothing-to-undo",
+    });
+    expect(bridge.undoLastVoiceEdit("destroyed-undo")).toEqual({
+      ok: false,
+      reason: "preview-not-found",
+    });
+    expect(bridge.stagePreview(destroyedPreview)).toEqual({
+      ok: false,
+      reason: "invalid-range",
+    });
+    expect(bridge.applyReplacement("destroyed-apply")).toEqual({
+      ok: false,
+      reason: "preview-not-found",
+    });
+    expect(bridge.discardPreview("destroyed-discard")).toEqual({
+      ok: false,
+      reason: "preview-not-found",
+    });
+    expect(bridge.highlight("target", null)).toEqual({
+      ok: false,
+      reason: "invalid-range",
+    });
+    expect(editor.getJSON()).toEqual(documentAfterApply);
+    expect(transactionCount).toBe(transactionsAfterApply);
   });
 
   it("highlights a range with decorations without changing revision or history", () => {
