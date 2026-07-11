@@ -65,7 +65,10 @@ const reconstructRangeText = (
         : "";
     if (slice.length !== Math.max(0, to - from)) return null;
 
-    if (position > 0) text += "\n\n";
+    if (position > 0) {
+      if (typeof paragraph.separatorBefore !== "string") return null;
+      text += paragraph.separatorBefore;
+    }
     text += slice;
   }
 
@@ -136,6 +139,31 @@ const validateTarget = (
   return { firstPosition: first.position, lastPosition: last.position };
 };
 
+const hasNonPlainOutput = (output: string) => {
+  const markdownPatterns = [
+    /```/u,
+    /(?:^|\n)\s{0,3}#{1,6}\s+\S/u,
+    /(?:^|\n)\s*(?:[-+*]\s+|\d+[.)]\s+)/u,
+    /(?:^|\n)\s*>\s?\S/u,
+    /\*\*[^*\n]+\*\*/u,
+    /__[^_\n]+__/u,
+    /(?<![\p{L}\p{N}])_(?=\S)[^_\n]*\S_(?![\p{L}\p{N}])/u,
+    /!?\[[^\]\n]+\]\([^\s)]+\)/u,
+    /`[^`\n]+`/u,
+  ];
+  const hasAsteriskEmphasis = [...output.matchAll(/\*([^*\n]+)\*/gu)].some(
+    (match) => !/^[\d\s.+\-*/()]+$/u.test(match[1] ?? ""),
+  );
+  const commentaryPrefix =
+    /^(?:改写如下|改写后(?:的)?(?:文本|版本)?|修改(?:后)?(?:的)?(?:文本|版本)?|(?:以下|这里)是(?:改写|修改)(?:后)?(?:的)?(?:文本|版本)?|建议(?:改写|修改)(?:为|如下)?)[：:]/u;
+
+  return (
+    commentaryPrefix.test(output) ||
+    hasAsteriskEmphasis ||
+    markdownPatterns.some((pattern) => pattern.test(output))
+  );
+};
+
 const promptFor = (input: RewriteInput, target: ValidatedTarget) => {
   const before =
     input.snapshot.paragraphs[target.firstPosition - 1]?.text ?? "";
@@ -175,7 +203,7 @@ export class RewriteService {
     if (replacement.length === 0) {
       throw new RewriteServiceError("empty-output");
     }
-    if (replacement.includes("```")) {
+    if (hasNonPlainOutput(replacement)) {
       throw new RewriteServiceError("non-plain-output");
     }
     if (replacement === input.range.text.trim()) {

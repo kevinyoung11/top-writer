@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+
+import { Editor } from "@tiptap/core";
+import { TextSelection } from "@tiptap/pm/state";
+import StarterKit from "@tiptap/starter-kit";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ModelFamily,
   SupportedRemoteModel,
@@ -10,6 +15,8 @@ import type {
 } from "../llms/text-generation-service";
 import { RewriteService, RewriteServiceError } from "./rewrite-service";
 import type { EditorSnapshot, ParagraphRef, VoiceRange } from "./types";
+import { EditorBridge } from "./editor/editor-bridge";
+import { VoiceHighlightExtension } from "./editor/voice-highlight-extension";
 
 const userConfig: UserConfig = {
   preferredLLM: SupportedRemoteModel["gpt-5-nano-free"],
@@ -20,7 +27,31 @@ const userConfig: UserConfig = {
   },
 };
 
-const paragraph = (index: number, text: string): ParagraphRef => {
+const editors: Editor[] = [];
+
+const createEditorBridge = (content: string) => {
+  const editor = new Editor({
+    element: document.createElement("div"),
+    extensions: [StarterKit, VoiceHighlightExtension],
+    content,
+  });
+  document.body.append(editor.view.dom);
+  editors.push(editor);
+  return { editor, bridge: new EditorBridge(editor) };
+};
+
+afterEach(() => {
+  while (editors.length > 0) {
+    const editor = editors.pop();
+    if (editor && !editor.isDestroyed) editor.destroy();
+  }
+});
+
+const paragraph = (
+  index: number,
+  text: string,
+  separatorBefore?: string,
+): ParagraphRef => {
   const nodeFrom = index * 100;
   const from = nodeFrom + 1;
   const to = from + text.length;
@@ -33,6 +64,7 @@ const paragraph = (index: number, text: string): ParagraphRef => {
     from,
     to,
     text,
+    separatorBefore,
   };
 };
 
@@ -53,7 +85,9 @@ const texts = [
 
 const snapshot = (): EditorSnapshot => ({
   revision: 23,
-  paragraphs: texts.map((text, index) => paragraph(index, text)),
+  paragraphs: texts.map((text, index) =>
+    paragraph(index, text, index === 0 ? "" : "\n\n"),
+  ),
   selection: {
     revision: 23,
     from: 303,
@@ -86,11 +120,14 @@ const crossPartialRange = (doc = snapshot()): VoiceRange => {
   const last = doc.paragraphs[4];
   const firstOffset = "P03：前缀".length;
   const lastOffset = "P04：紧邻".length;
+  if (typeof last.separatorBefore !== "string") {
+    throw new Error("Expected a structural separator for the fixture");
+  }
   return {
     revision: doc.revision,
     from: first.from + firstOffset,
     to: last.from + lastOffset,
-    text: `${first.text.slice(firstOffset)}\n\n${last.text.slice(0, lastOffset)}`,
+    text: `${first.text.slice(firstOffset)}${last.separatorBefore}${last.text.slice(0, lastOffset)}`,
     paragraphIndexes: [3, 4],
     block: false,
   };
@@ -199,6 +236,64 @@ describe("RewriteService", () => {
     expect(prompt).not.toContain(doc.paragraphs[6].text);
   });
 
+  it("uses the bridge's exact structural separator for an HR-spanning selection", async () => {
+    const { editor, bridge } = createEditorBridge(
+      "<p>Alpha</p><hr><p>Beta</p>",
+    );
+    const initial = bridge.getSnapshot();
+    const first = initial.paragraphs[0];
+    const second = initial.paragraphs[1];
+    const from = first.from + 1;
+    const to = second.to - 1;
+    editor.view.dispatch(
+      editor.state.tr.setSelection(
+        TextSelection.create(editor.state.doc, from, to),
+      ),
+    );
+    const doc = bridge.getSnapshot();
+    const range = doc.selection;
+    if (!range) throw new Error("Expected the cross-block selection");
+
+    const expectedSeparator = editor.state.doc.textBetween(
+      doc.paragraphs[0].to,
+      doc.paragraphs[1].from,
+      "\n\n",
+      "\n",
+    );
+    expect(doc.paragraphs[1].separatorBefore).toBe(expectedSeparator);
+    expect(range.text).toBe(
+      editor.state.doc.textBetween(from, to, "\n\n", "\n"),
+    );
+
+    const generated = createGenerator("替换内容");
+    const service = new RewriteService(generated.service);
+    await expect(service.rewrite(requestInput({ doc, range }))).resolves.toBe(
+      "替换内容",
+    );
+    expect(firstGeneratedRequest(generated.generate).prompt).toContain(
+      `目标原文：${JSON.stringify(range.text)}`,
+    );
+  });
+
+  it("rejects a cross-block range without an exact structural separator before generating", async () => {
+    const doc = snapshot();
+    const range = crossPartialRange(doc);
+    doc.paragraphs[4] = {
+      ...doc.paragraphs[4],
+      separatorBefore: undefined,
+    };
+    const generated = createGenerator("should not run");
+    const service = new RewriteService(generated.service);
+
+    await expect(
+      service.rewrite(requestInput({ doc, range })),
+    ).rejects.toMatchObject({
+      name: "RewriteServiceError",
+      code: "invalid-range",
+    });
+    expect(generated.generate).not.toHaveBeenCalled();
+  });
+
   it("preserves a partial hard-break slice from the snapshot text", async () => {
     const doc = snapshot();
     doc.paragraphs[3] = paragraph(3, "P03：前\n缀选中片段后缀。");
@@ -273,6 +368,15 @@ describe("RewriteService", () => {
     ["", "empty-output"],
     ["  选中片段\n", "unchanged-output"],
     ["```markdown\n改写后的文本\n```", "non-plain-output"],
+    ["改写如下：**新文本**", "non-plain-output"],
+    ["改写如下：新文本", "non-plain-output"],
+    ["# Markdown 标题\n正文", "non-plain-output"],
+    ["- Markdown 列表", "non-plain-output"],
+    ["> Markdown 引用", "non-plain-output"],
+    ["这是 *强调* 文本", "non-plain-output"],
+    ["这是 _强调_ 文本", "non-plain-output"],
+    ["[链接](https://example.com)", "non-plain-output"],
+    ["`行内代码`", "non-plain-output"],
   ] as const)("rejects %s as a typed %s error", async (output, code) => {
     const generated = createGenerator(output);
     const service = new RewriteService(generated.service);
@@ -281,6 +385,18 @@ describe("RewriteService", () => {
       name: "RewriteServiceError",
       code,
     } satisfies Partial<RewriteServiceError>);
+  });
+
+  it.each([
+    "正常的纯文本改写。",
+    "第一段改写。\n\n第二段改写。",
+    "普通句子：保留中文标点，括号（示例）和引号“内容”。",
+    "数学表达式 2*3*4，不应被当作 Markdown。",
+  ])("accepts ordinary plain-text output %s", async (output) => {
+    const generated = createGenerator(output);
+    const service = new RewriteService(generated.service);
+
+    await expect(service.rewrite(requestInput())).resolves.toBe(output);
   });
 
   it("propagates ordinary provider and AbortError failures without wrapping", async () => {
