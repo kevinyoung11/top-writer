@@ -101,40 +101,82 @@ const rewriteTarget = (text: string) => {
 const stripQuotedText = (value: string) =>
   value.replace(/“[^”]*”|‘[^’]*’|"[^"]*"|'[^']*'|「[^」]*」|『[^』]*』/gu, "");
 
-const directNumberedTargetTailPattern = /^[\s，,；;。！？!?]*$/u;
-const constructionNumberedTargetTailPattern =
+const directScopeTailPattern = /^[\s，,；;。！？!?]*$/u;
+const constructionScopeTailPattern =
   /^[\s，,；;。！？!?]*(?:改写|改得|改成|改为|改|润色|调整|压缩|精简)[\s\S]*$/u;
+const additionalScopePattern =
+  /第[\s\S]*?段|选中(?:的)?(?:内容|文字|部分)?|当前(?:这)?(?:一)?(?:段|部分)|上一段|前一段|下一段|后一段|全文|全部|这(?:一)?(?:段|部分)/u;
 
-const rewriteScope = (text: string): VoiceScope | null => {
-  const target = rewriteTarget(text);
+const rewriteScopeTokens: Array<{ pattern: RegExp; scope: VoiceScope }> = [
+  {
+    pattern: /^选中(?:的)?(?:内容|文字|部分)?/u,
+    scope: { kind: "selection" },
+  },
+  {
+    pattern: /^当前(?:这)?(?:一)?(?:段|部分)/u,
+    scope: { kind: "current" },
+  },
+  { pattern: /^(?:上一段|前一段)/u, scope: { kind: "previous" } },
+  { pattern: /^(?:下一段|后一段)/u, scope: { kind: "next" } },
+  { pattern: /^(?:全文|全部)/u, scope: { kind: "document" } },
+  {
+    pattern: /^这(?:一)?(?:段|部分)/u,
+    scope: { kind: "effective" },
+  },
+];
 
+type RewriteScopeTarget =
+  | { status: "none" }
+  | { status: "invalid" }
+  | { status: "matched"; scope: VoiceScope; remainder: string };
+
+const matchRewriteScopeTarget = (target: string): RewriteScopeTarget => {
   if (target.startsWith("第")) {
     const numbered = target.match(/^第\s*([\s\S]*?)\s*段/);
-    if (!numbered) return null;
+    if (!numbered) return { status: "invalid" };
 
     const scope = paragraphScope(numbered[1]);
-    if (!scope) return null;
+    return scope
+      ? {
+          status: "matched",
+          scope,
+          remainder: target.slice(numbered[0].length),
+        }
+      : { status: "invalid" };
+  }
 
-    const remainder = target.slice(numbered[0].length);
-    const construction = /^(?:请\s*)?(?:把|将)/u.test(text);
-    if (construction) {
-      if (
-        !constructionNumberedTargetTailPattern.test(remainder) ||
-        /第[\s\S]*?段/u.test(stripQuotedText(remainder))
-      ) {
-        return null;
-      }
-    } else if (!directNumberedTargetTailPattern.test(remainder)) {
+  for (const token of rewriteScopeTokens) {
+    const match = target.match(token.pattern);
+    if (match) {
+      return {
+        status: "matched",
+        scope: token.scope,
+        remainder: target.slice(match[0].length),
+      };
+    }
+  }
+
+  return { status: "none" };
+};
+
+const rewriteScope = (text: string): VoiceScope | null => {
+  const target = matchRewriteScopeTarget(rewriteTarget(text));
+  if (target.status === "invalid") return null;
+  if (target.status === "none") return { kind: "effective" };
+
+  const construction = /^(?:请\s*)?(?:把|将)/u.test(text);
+  if (construction) {
+    if (
+      !constructionScopeTailPattern.test(target.remainder) ||
+      additionalScopePattern.test(stripQuotedText(target.remainder))
+    ) {
       return null;
     }
-
-    return scope;
+  } else if (!directScopeTailPattern.test(target.remainder)) {
+    return null;
   }
-  if (/^选中/.test(target)) return { kind: "selection" };
-  if (/^(?:上一段|前一段)/.test(target)) return { kind: "previous" };
-  if (/^(?:下一段|后一段)/.test(target)) return { kind: "next" };
-  if (/^(?:全文|全部)/.test(target)) return { kind: "document" };
-  return { kind: "effective" };
+
+  return target.scope;
 };
 
 const normalizeSemanticQuery = (value: string) =>

@@ -243,6 +243,65 @@ describe("parseVoicePlan", () => {
     });
   });
 
+  it.each([
+    "改上一段和下一段",
+    "改选中内容和下一段",
+    "改全文和上一段",
+    "改当前段和下一段",
+    "改前一段和后一段",
+    "改全部和前一段",
+    "把上一段落改得更直接",
+    "把上一段和下一段改得更直接",
+    "把选中内容和下一段改得更直接",
+    "把全文和上一段改得更直接",
+    "把当前段和下一段改得更直接",
+  ])(
+    "rejects an incomplete or multi-scope rewrite target in %s",
+    (transcript) => {
+      expect(parseVoicePlan(transcript)).toMatchObject({
+        confidence: 0,
+        actions: [],
+      });
+    },
+  );
+
+  it.each([
+    ["把上一段改得更直接", { kind: "previous" }],
+    ["把前一段改得更直接", { kind: "previous" }],
+    ["把下一段改得更直接", { kind: "next" }],
+    ["把后一段改得更直接", { kind: "next" }],
+    ["把选中内容改得更直接", { kind: "selection" }],
+    ["把全文改得更直接", { kind: "document" }],
+    ["把全部改得更直接", { kind: "document" }],
+    ["改当前段", { kind: "current" }],
+    ["改当前一段", { kind: "current" }],
+  ])("preserves one complete explicit scope in %s", (transcript, scope) => {
+    expect(parseVoicePlan(transcript).actions).toEqual([
+      {
+        intent: "rewrite",
+        scope,
+        constraints: [transcript],
+      },
+    ]);
+  });
+
+  it.each([
+    ["把上一段改成“下一段”", { kind: "previous" }],
+    ["把选中内容改成“全文”", { kind: "selection" }],
+    ["把全文改成『上一段』", { kind: "document" }],
+  ])(
+    "ignores quoted target-like replacement text in %s",
+    (transcript, scope) => {
+      expect(parseVoicePlan(transcript).actions).toEqual([
+        {
+          intent: "rewrite",
+          scope,
+          constraints: [transcript],
+        },
+      ]);
+    },
+  );
+
   it.each(["改第5段，", "改第5段；"])(
     "allows trailing punctuation after one numbered target in %s",
     (transcript) => {
