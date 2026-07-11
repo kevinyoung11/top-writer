@@ -371,8 +371,14 @@ export async function detectGPUDevice(): Promise<
       requiredFeatures.push('shader-f16');
     }
 
-    // @ts-ignore
-    const adapterInfo = await adapter.requestAdapterInfo();
+    const adapterWithInfo = adapter as GPUAdapter & {
+      requestAdapterInfo?: () => Promise<GPUAdapterInfo>;
+    };
+    // requestAdapterInfo is optional in current WebGPU implementations.
+    // Capability detection must not prevent the editor from mounting.
+    const adapterInfo = adapterWithInfo.requestAdapterInfo
+      ? await adapterWithInfo.requestAdapterInfo()
+      : ({} as GPUAdapterInfo);
     const device = await adapter.requestDevice({
       requiredLimits: {
         maxBufferSize: requiredMaxBufferSize,
@@ -383,7 +389,6 @@ export async function detectGPUDevice(): Promise<
     });
     return {
       adapter: adapter,
-      // @ts-ignore
       adapterInfo: adapterInfo,
       device: device
     };
