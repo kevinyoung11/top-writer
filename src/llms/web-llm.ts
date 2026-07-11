@@ -132,7 +132,11 @@ self.onmessage = (e: MessageEvent<TextGenLocalWorkerMessage>) => {
     }
 
     case 'startTextGen': {
-      startTextGen(e.data.payload.prompt, e.data.payload.temperature);
+      startTextGen(
+        e.data.payload.requestID,
+        e.data.payload.prompt,
+        e.data.payload.temperature
+      );
       break;
     }
 
@@ -198,10 +202,15 @@ const startLoadModel = async (
 
 /**
  * Use Web LLM to generate text based on a given prompt
+ * @param requestID Request ID to echo to the caller
  * @param prompt Prompt to give to the PaLM model
  * @param temperature Model temperature
  */
-const startTextGen = async (prompt: string, temperature: number) => {
+const startTextGen = async (
+  requestID: string,
+  prompt: string,
+  temperature: number
+) => {
   try {
     const curEngine = await engine!;
     const response = await curEngine.chat.completions.create({
@@ -220,7 +229,7 @@ const startTextGen = async (prompt: string, temperature: number) => {
     const message: TextGenLocalWorkerMessage = {
       command: 'finishTextGen',
       payload: {
-        requestID: 'web-llm',
+        requestID,
         apiKey: '',
         result: response.choices[0].message.content || '',
         prompt: prompt,
@@ -233,9 +242,9 @@ const startTextGen = async (prompt: string, temperature: number) => {
     const message: TextGenLocalWorkerMessage = {
       command: 'error',
       payload: {
-        requestID: 'web-llm',
+        requestID,
         originalCommand: 'startTextGen',
-        message: error as string
+        message: error instanceof Error ? error.message : String(error)
       }
     };
     postMessage(message);

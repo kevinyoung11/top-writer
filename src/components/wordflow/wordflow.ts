@@ -12,6 +12,7 @@ import { WordflowTextEditor } from '../text-editor/text-editor';
 import { v4 as uuidv4, validate } from 'uuid';
 import { config } from '../../config/config';
 import { PRODUCT_NAME } from '../../config/brand';
+import { TextGenerationService } from '../../llms/text-generation-service';
 import { PromptManager } from './prompt-manager';
 import { RemotePromptManager } from './remote-prompt-manager';
 import { UserConfigManager, UserConfig } from './user-config';
@@ -36,7 +37,6 @@ import type { NightjarToast } from '../toast/toast';
 import type { PrivacyDialog } from '../privacy-dialog/privacy-dialog';
 import type { PrivacyDialogSimple } from '../privacy-dialog/privacy-dialog-simple';
 import type { WordflowSettingWindow } from '../setting-window/setting-window';
-import type { TextGenLocalWorkerMessage } from '../../llms/web-llm';
 
 // Components
 import '../toast/toast';
@@ -154,6 +154,7 @@ export class WordflowWordflow extends LitElement {
   lastUpdateSidebarMenuProps: UpdateSidebarMenuProps | null = null;
 
   textGenLocalWorker: Worker;
+  textGenerationService: TextGenerationService;
 
   // ===== Lifecycle Methods ======
   constructor() {
@@ -226,6 +227,9 @@ export class WordflowWordflow extends LitElement {
 
     // Initialize the local llm worker
     this.textGenLocalWorker = new TextGenLocalWorkerInline();
+    this.textGenerationService = new TextGenerationService({
+      worker: this.textGenLocalWorker
+    });
   }
 
   firstUpdated() {
@@ -533,7 +537,7 @@ export class WordflowWordflow extends LitElement {
               .updateSidebarMenu=${this.updateSidebarMenu}
               .promptManager=${this.promptManager}
               .userConfig=${this.userConfig}
-              .textGenLocalWorker=${this.textGenLocalWorker}
+              .textGenerationService=${this.textGenerationService}
               @loading-finished=${() => this.textEditorLoadingFinishedHandler()}
               @show-toast=${(e: CustomEvent<ToastMessage>) => {
                 this.toastMessage = e.detail.message;

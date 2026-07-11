@@ -23,8 +23,21 @@ export const textGenGemini = async (
   temperature: number,
   useCache: boolean = false,
   stopSequences: string[] = [],
-  detail: string = ''
-) => {
+  detail: string = '',
+  signal?: AbortSignal
+): Promise<TextGenMessage> => {
+  if (signal?.aborted) {
+    const message: TextGenMessage = {
+      command: 'error',
+      payload: {
+        requestID,
+        originalCommand: 'startTextGen',
+        message: 'aborted'
+      }
+    };
+    return message;
+  }
+
   // Configure safety setting to allow low-probability unsafe responses
   const safetySettings: SafetySetting[] = [
     {
@@ -67,6 +80,16 @@ export const textGenGemini = async (
   if (useCache && cachedValue !== null) {
     console.log('Use cached output (text gen)');
     await new Promise(resolve => setTimeout(resolve, 1000));
+    if (signal?.aborted) {
+      return {
+        command: 'error',
+        payload: {
+          requestID,
+          originalCommand: 'startTextGen',
+          message: 'aborted'
+        }
+      };
+    }
     const message: TextGenMessage = {
       command: 'finishTextGen',
       payload: {
@@ -89,7 +112,8 @@ export const textGenGemini = async (
   const requestOptions: RequestInit = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(parameter)
+    body: JSON.stringify(parameter),
+    signal
   };
 
   try {
@@ -110,6 +134,7 @@ export const textGenGemini = async (
 
     // Send back the data to the main thread
     const result = data.candidates[0].content.parts[0].text;
+    if (signal?.aborted) throw new DOMException('aborted', 'AbortError');
     const message: TextGenMessage = {
       command: 'finishTextGen',
       payload: {
@@ -127,13 +152,20 @@ export const textGenGemini = async (
     }
     return message;
   } catch (error) {
+    const errorMessage =
+      signal?.aborted ||
+      (error instanceof Error && error.name === 'AbortError')
+        ? 'aborted'
+        : error instanceof Error
+          ? error.message
+          : String(error);
     // Throw the error to the main thread
     const message: TextGenMessage = {
       command: 'error',
       payload: {
         requestID,
         originalCommand: 'startTextGen',
-        message: error as string
+        message: errorMessage
       }
     };
     return message;
