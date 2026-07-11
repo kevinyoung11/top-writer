@@ -423,6 +423,10 @@ export class WordflowWordflow extends LitElement {
 
     if (isSharedVoicePreview) {
       this.agentReviewVisible = true;
+      // A modal drawer intentionally blocks background controls. Once a voice
+      // rewrite has been staged as a shared Agent Editor suggestion, return
+      // focus to the document surface so its single review bar is actionable.
+      this.voiceDrawerOpen = false;
     } else if (!hasSuggestions) {
       this.agentReviewVisible = false;
     }
