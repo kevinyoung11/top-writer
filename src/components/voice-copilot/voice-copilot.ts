@@ -18,7 +18,7 @@ export class VoiceCopilotPanel extends LitElement {
   willUpdate(changed: PropertyValues<this>) { if (changed.has("controller") && this.isConnected) { this.unbind(changed.get("controller") as VoiceCopilotController | null); this.bind(this.controller); } }
   private bind(controller: VoiceCopilotController | null) { if (!controller) return; this.voiceState = controller.state; controller.addEventListener("state-change", this.onState); }
   private unbind(controller: VoiceCopilotController | null) { controller?.removeEventListener("state-change", this.onState); }
-  focusHeading() { this.heading?.focus(); }
+  focusHeading() { this.heading?.focus({ preventScroll: true }); }
   private submit(event: SubmitEvent) { event.preventDefault(); const form = event.currentTarget as HTMLFormElement; const value = new FormData(form).get("command"); const text = typeof value === "string" ? value.trim() : ""; if (text) void this.controller?.submitTranscript(text); form.reset(); }
   private mic() { const phase = this.voiceState?.phase; if (phase === "listening") this.controller?.stopListening(); else if (phase && phase !== "idle" && phase !== "error" && phase !== "applied") this.controller?.cancel(); else if (this.preferences?.value.privacyNoticeAccepted) this.controller?.startListening(); else this.showPrivacyNotice = true; }
   private acceptPrivacy() { this.preferences?.update({ privacyNoticeAccepted: true }); this.showPrivacyNotice = false; this.controller?.startListening(); }
