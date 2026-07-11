@@ -19,6 +19,21 @@ import {
   voiceEditorStatePluginKey,
   type VoiceHighlightChannel,
 } from "./voice-highlight-extension";
+import {
+  acceptAgentSuggestion as acceptSuggestion,
+  acceptAllAgentSuggestions as acceptAllSuggestions,
+  addAgentSuggestions as addSuggestions,
+  currentAgentSuggestion as currentSuggestion,
+  listAgentSuggestions as listSuggestions,
+  nextAgentSuggestion as nextSuggestion,
+  previousAgentSuggestion as previousSuggestion,
+  rejectAgentSuggestion as rejectSuggestion,
+  rejectAllAgentSuggestions as rejectAllSuggestions,
+  type AgentSuggestion,
+  type AgentSuggestionResult,
+} from "../../agent/agent-suggestion-extension";
+import { hashOriginalText } from "../../agent/edit-protocol";
+import type { AgentEditOperation } from "../../agent/types";
 
 export { VOICE_EDIT_META } from "./voice-highlight-extension";
 
@@ -234,6 +249,7 @@ const isCrossTextblockRange = (
 export class EditorBridge {
   private readonly editor: Editor;
   private readonly stagedPreviews = new Map<string, StagedPreview>();
+  private readonly sharedVoicePreviewIds = new Set<string>();
   private readonly revisionListeners = new Set<(revision: number) => void>();
   private lastVoiceEdit: LastVoiceEdit | null = null;
   private undoPreviewId: string | null = null;
@@ -274,6 +290,7 @@ export class EditorBridge {
     this.destroyed = true;
     this.editor.off("transaction", this.transactionListener);
     this.stagedPreviews.clear();
+    this.sharedVoicePreviewIds.clear();
     this.revisionListeners.clear();
     this.lastVoiceEdit = null;
     this.undoPreviewId = null;
@@ -287,6 +304,52 @@ export class EditorBridge {
       );
     }
     return state.revision;
+  }
+
+  addAgentSuggestions(
+    operations: readonly AgentEditOperation[],
+    canCommit?: () => boolean,
+  ): Promise<AgentSuggestionResult<string[]>> {
+    if (this.destroyed) {
+      return Promise.resolve({ ok: false, reason: "agent-suggestions-unavailable" });
+    }
+    return addSuggestions(this.editor, operations, canCommit);
+  }
+
+  listAgentSuggestions(): AgentSuggestion[] {
+    return this.destroyed ? [] : listSuggestions(this.editor);
+  }
+
+  currentAgentSuggestion(): AgentSuggestion | null {
+    return this.destroyed ? null : currentSuggestion(this.editor);
+  }
+
+  nextAgentSuggestion(): AgentSuggestion | null {
+    return this.destroyed ? null : nextSuggestion(this.editor);
+  }
+
+  previousAgentSuggestion(): AgentSuggestion | null {
+    return this.destroyed ? null : previousSuggestion(this.editor);
+  }
+
+  rejectAgentSuggestion(id?: string): AgentSuggestionResult<string> {
+    if (this.destroyed) return { ok: false, reason: "agent-suggestions-unavailable" };
+    return rejectSuggestion(this.editor, id);
+  }
+
+  acceptAgentSuggestion(id?: string): AgentSuggestionResult<string> {
+    if (this.destroyed) return { ok: false, reason: "agent-suggestions-unavailable" };
+    return acceptSuggestion(this.editor, id);
+  }
+
+  rejectAllAgentSuggestions(): AgentSuggestionResult<string[]> {
+    if (this.destroyed) return { ok: false, reason: "agent-suggestions-unavailable" };
+    return rejectAllSuggestions(this.editor);
+  }
+
+  acceptAllAgentSuggestions(): AgentSuggestionResult<string[]> {
+    if (this.destroyed) return { ok: false, reason: "agent-suggestions-unavailable" };
+    return acceptAllSuggestions(this.editor);
   }
 
   getSnapshot(lastSpokenParagraphIndex: number | null = null): EditorSnapshot {
@@ -380,15 +443,106 @@ export class EditorBridge {
     return this.storePreview(preview);
   }
 
+  /**
+   * Adapts a voice rewrite preview to the shared review facade. Editors that
+   * predate AgentSuggestionExtension keep the existing staged-preview path.
+   */
+  async stageVoiceRewriteSuggestion(
+    preview: RewritePreview,
+  ): Promise<BridgeResult<void>> {
+    const staged = this.stagePreview(preview);
+    if (!staged.ok) return staged;
+
+    const hash = await hashOriginalText(preview.originalText);
+    if (!hash.ok) return staged;
+
+    const operation: AgentEditOperation = {
+      id: preview.id,
+      type: "replaceRange",
+      revision: preview.revision,
+      from: preview.range.from,
+      to: preview.range.to,
+      originalTextHash: hash.hash,
+      replacement: preview.replacementText,
+      reason: "voice-rewrite",
+    };
+    const added = await this.addAgentSuggestions(
+      [operation],
+      () => !this.destroyed && this.stagedPreviews.has(preview.id),
+    );
+    if (added.ok) {
+      this.sharedVoicePreviewIds.add(preview.id);
+      return staged;
+    }
+    if (added.reason === "agent-suggestions-unavailable") return staged;
+
+    this.stagedPreviews.delete(preview.id);
+    return failure(
+      added.reason === "stale-revision" ? "stale-revision" : "invalid-range",
+    );
+  }
+
   discardPreview(previewId: string): BridgeResult<void> {
     if (this.destroyed) return failure("preview-not-found");
     if (!this.stagedPreviews.delete(previewId)) {
       return failure("preview-not-found");
     }
+    if (this.sharedVoicePreviewIds.delete(previewId)) {
+      this.rejectAgentSuggestion(previewId);
+    }
     if (this.undoPreviewId === previewId) {
       this.undoPreviewId = null;
     }
     return success(undefined);
+  }
+
+  /**
+   * Rebase a shared voice suggestion only when the Agent Editor has safely
+   * remapped it as part of accepting another suggestion. Ordinary document
+   * edits leave the suggestion's revision unchanged and must still stale the
+   * voice preview.
+   */
+  rebaseSharedVoiceRewritePreview(previewId: string): RewritePreview | null {
+    if (this.destroyed || !this.sharedVoicePreviewIds.has(previewId)) {
+      return null;
+    }
+
+    const staged = this.stagedPreviews.get(previewId);
+    const suggestion = this.listAgentSuggestions().find(
+      (item) => item.id === previewId,
+    );
+    if (!staged || !suggestion) return null;
+
+    const operation = suggestion.operation;
+    const revision = this.getRevision();
+    if (
+      operation.type !== "replaceRange" ||
+      operation.revision !== revision ||
+      operation.replacement !== staged.snapshot.replacementText
+    ) {
+      return null;
+    }
+
+    const preview: RewritePreview = {
+      ...staged.snapshot,
+      revision,
+      range: {
+        ...staged.snapshot.range,
+        revision,
+        from: operation.from,
+        to: operation.to,
+        text: textForRange(this.editor.state.doc, operation.from, operation.to),
+      },
+    };
+    if (
+      preview.range.text !== preview.originalText ||
+      !this.previewMatchesDocument(preview)
+    ) {
+      return null;
+    }
+
+    staged.snapshot = clonePreview(preview);
+    return clonePreview(preview);
   }
 
   onRevisionChange(listener: (revision: number) => void): () => void {
@@ -444,7 +598,9 @@ export class EditorBridge {
       return failure("invalid-range");
     }
     this.stagedPreviews.delete(previewId);
+    const useSharedSuggestion = this.sharedVoicePreviewIds.delete(previewId);
     if (previewIntegrity(staged.source) !== staged.integrity) {
+      if (useSharedSuggestion) this.rejectAgentSuggestion(previewId);
       return failure("invalid-range");
     }
     const preview = staged.snapshot;
@@ -485,8 +641,21 @@ export class EditorBridge {
 
     const appliedFrom = transaction.mapping.map(preview.range.from, -1);
     const appliedTo = transaction.mapping.map(preview.range.to, 1);
-    transaction.setMeta(VOICE_EDIT_META, true);
-    this.editor.view.dispatch(transaction);
+    if (useSharedSuggestion) {
+      const accepted = this.acceptAgentSuggestion(preview.id);
+      if (!accepted.ok) {
+        return failure(
+          accepted.reason === "stale-revision"
+            ? "stale-revision"
+            : accepted.reason === "suggestion-not-found"
+              ? "preview-not-found"
+              : "invalid-range",
+        );
+      }
+    } else {
+      transaction.setMeta(VOICE_EDIT_META, true);
+      this.editor.view.dispatch(transaction);
+    }
 
     const afterRevision = this.getRevision();
     if (this.destroyed) {

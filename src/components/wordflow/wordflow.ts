@@ -20,7 +20,14 @@ import { SemanticLocator } from '../../voice/semantic-locator';
 import { BrowserSpeechRecognizer } from '../../voice/speech/browser-recognizer';
 import { BrowserSpeechSynthesizer } from '../../voice/speech/browser-synthesizer';
 import { VoiceCopilotController } from '../../voice/voice-copilot-controller';
+import { AgentSessionController } from '../../agent/agent-session-controller';
 import type { VoiceCopilotPanel } from '../voice-copilot/voice-copilot';
+import type {
+  AgentToolbarCommand,
+  AgentToolbarBlockType,
+  AgentToolbarFacade
+} from '../agent-editor/agent-toolbar';
+import type { AgentReviewFacade } from '../agent-editor/agent-review-bar';
 import { PromptManager } from './prompt-manager';
 import { RemotePromptManager } from './remote-prompt-manager';
 import { UserConfigManager, UserConfig } from './user-config';
@@ -56,6 +63,8 @@ import '../privacy-dialog/privacy-dialog';
 import '../privacy-dialog/privacy-dialog-simple';
 import '../voice-player/voice-player';
 import '../voice-copilot/voice-copilot';
+import '../agent-editor/agent-toolbar';
+import '../agent-editor/agent-review-bar';
 
 // Assets
 import componentCSS from './wordflow.css?inline';
@@ -133,6 +142,18 @@ export class WordflowWordflow extends LitElement {
   private voiceDrawerOpen = false;
 
   @state()
+  private agentReviewVisible = false;
+
+  @state()
+  private agentReviewRefresh = 0;
+
+  @state()
+  private agentToolbarRefresh = 0;
+
+  @state()
+  private editorZoom = 100;
+
+  @state()
   loadingActionIndex: number | null = null;
 
   @state()
@@ -184,9 +205,13 @@ export class WordflowWordflow extends LitElement {
   textGenerationService: TextGenerationService;
   private voiceController: VoiceCopilotController | null = null;
   private voiceBridge: EditorBridge | null = null;
+  private agentController: AgentSessionController | null = null;
+  private toolbarTransactionEditor: Editor | null = null;
   private readonly voicePreferences = new VoicePreferencesStore();
   private voicePlayerResizeObserver: ResizeObserver | null = null;
   private observedVoicePlayer: HTMLElement | null = null;
+  private agentReviewResizeObserver: ResizeObserver | null = null;
+  private observedAgentReview: HTMLElement | null = null;
 
   // ===== Lifecycle Methods ======
   constructor() {
@@ -274,31 +299,72 @@ export class WordflowWordflow extends LitElement {
     const player = this.shadowRoot?.querySelector<HTMLElement>(
       'top-writer-voice-player'
     ) ?? null;
-    if (player === this.observedVoicePlayer) return;
+    if (player !== this.observedVoicePlayer) {
+      this.voicePlayerResizeObserver?.disconnect();
+      this.voicePlayerResizeObserver = null;
+      this.observedVoicePlayer = player;
+      this.observeLayoutHeight(
+        player,
+        '--voice-player-height',
+        observer => (this.voicePlayerResizeObserver = observer)
+      );
+    }
 
-    this.voicePlayerResizeObserver?.disconnect();
-    this.voicePlayerResizeObserver = null;
-    this.observedVoicePlayer = player;
+    const review = this.shadowRoot?.querySelector<HTMLElement>(
+      'top-writer-agent-review-bar'
+    ) ?? null;
+    if (review !== this.observedAgentReview) {
+      this.agentReviewResizeObserver?.disconnect();
+      this.agentReviewResizeObserver = null;
+      this.observedAgentReview = review;
+      this.observeLayoutHeight(
+        review,
+        '--agent-review-height',
+        observer => (this.agentReviewResizeObserver = observer)
+      );
+    }
+  }
 
-    if (!player || typeof ResizeObserver === 'undefined') return;
-    this.voicePlayerResizeObserver = new ResizeObserver(entries => {
+  private observeLayoutHeight(
+    element: HTMLElement | null,
+    variable: '--voice-player-height' | '--agent-review-height',
+    setObserver: (observer: ResizeObserver) => void
+  ) {
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(entries => {
       const height = entries[0]?.contentRect.height;
       if (typeof height === 'number') {
-        this.workflowElement?.style.setProperty(
-          '--voice-player-height',
-          `${height}px`
-        );
+        this.workflowElement?.style.setProperty(variable, `${height}px`);
       }
     });
-    this.voicePlayerResizeObserver.observe(player);
+    setObserver(observer);
+    observer.observe(element);
   }
 
   disconnectedCallback() {
     this.voicePlayerResizeObserver?.disconnect();
     this.voicePlayerResizeObserver = null;
     this.observedVoicePlayer = null;
+    this.agentReviewResizeObserver?.disconnect();
+    this.agentReviewResizeObserver = null;
+    this.observedAgentReview = null;
     this.voiceController?.destroy();
+    this.voiceController?.removeEventListener(
+      'state-change',
+      this.voiceStateHandler
+    );
     this.voiceController = null;
+    this.agentController?.removeEventListener(
+      'statechange',
+      this.agentSessionStateHandler
+    );
+    this.agentController?.destroy();
+    this.agentController = null;
+    this.toolbarTransactionEditor?.off(
+      'transaction',
+      this.agentToolbarTransactionHandler
+    );
+    this.toolbarTransactionEditor = null;
     this.voiceBridge?.destroy();
     this.voiceBridge = null;
     this.textGenerationService.destroy();
@@ -318,7 +384,232 @@ export class WordflowWordflow extends LitElement {
       preferences: this.voicePreferences,
       getModelContext: () => ({ userConfig: this.userConfig, userID: this.initUserID() })
     });
+    this.voiceController.addEventListener(
+      'state-change',
+      this.voiceStateHandler
+    );
+    this.agentController = new AgentSessionController({
+      bridge,
+      generator: this.textGenerationService,
+      temperature: 0.2,
+      userConfig: this.userConfig,
+      userID: this.initUserID()
+    });
+    this.agentController.addEventListener(
+      'statechange',
+      this.agentSessionStateHandler
+    );
+    const editor = this.textEditorElement?.editor;
+    if (editor) {
+      this.toolbarTransactionEditor = editor;
+      editor.on('transaction', this.agentToolbarTransactionHandler);
+    }
     this.requestUpdate();
+  }
+
+  private readonly agentSessionStateHandler = () => {
+    if (this.agentController?.state.result?.status === 'suggested') {
+      this.agentReviewVisible = true;
+    }
+    this.agentReviewRefresh += 1;
+  };
+
+  private readonly voiceStateHandler = () => {
+    const preview = this.voiceController?.state.preview;
+    const hasSuggestions = (this.voiceBridge?.listAgentSuggestions().length ?? 0) > 0;
+    const isSharedVoicePreview =
+      preview?.mode === 'rewrite' &&
+      this.voiceBridge?.currentAgentSuggestion()?.id === preview.id;
+
+    if (isSharedVoicePreview) {
+      this.agentReviewVisible = true;
+      // A modal drawer intentionally blocks background controls. Once a voice
+      // rewrite has been staged as a shared Agent Editor suggestion, return
+      // focus to the document surface so its single review bar is actionable.
+      this.voiceDrawerOpen = false;
+    } else if (!hasSuggestions) {
+      this.agentReviewVisible = false;
+    }
+    this.agentReviewRefresh += 1;
+  };
+
+  private readonly agentToolbarTransactionHandler = () => {
+    this.agentToolbarRefresh += 1;
+  };
+
+  private readonly agentToolbarController: AgentToolbarFacade = {
+    execute: command => this.executeEditorCommand(command),
+    launchAgent: () => this.launchAgentSession(),
+    supports: command => this.supportsEditorCommand(command),
+    isEnabled: command => this.canExecuteEditorCommand(command),
+    isActive: command => this.isEditorCommandActive(command),
+    getZoom: () => this.editorZoom,
+    getBlockType: () => this.getEditorBlockType(),
+    canLaunchAgent: () =>
+      this.agentController !== null &&
+      this.agentController.state.phase !== 'running'
+  };
+
+  private readonly agentReviewController: AgentReviewFacade = {
+    listAgentSuggestions: () => this.voiceBridge?.listAgentSuggestions() ?? [],
+    currentAgentSuggestion: () => this.voiceBridge?.currentAgentSuggestion() ?? null,
+    previousAgentSuggestion: () => this.voiceBridge?.previousAgentSuggestion() ?? null,
+    nextAgentSuggestion: () => this.voiceBridge?.nextAgentSuggestion() ?? null,
+    acceptAgentSuggestion: () => {
+      const id = this.voiceBridge?.currentAgentSuggestion()?.id;
+      if (this.voiceController?.acceptSharedReviewSuggestion(id)) return;
+      return this.voiceBridge?.acceptAgentSuggestion();
+    },
+    rejectAgentSuggestion: () => {
+      const id = this.voiceBridge?.currentAgentSuggestion()?.id;
+      if (this.voiceController?.rejectSharedReviewSuggestion(id)) return;
+      return this.voiceBridge?.rejectAgentSuggestion();
+    },
+    acceptAllAgentSuggestions: () => {
+      const previewId = this.voiceController?.state.preview?.id;
+      if (previewId) this.voiceController?.acceptSharedReviewSuggestion(previewId);
+      return this.voiceBridge?.acceptAllAgentSuggestions();
+    },
+    rejectAllAgentSuggestions: () => {
+      const previewId = this.voiceController?.state.preview?.id;
+      if (previewId) this.voiceController?.rejectSharedReviewSuggestion(previewId);
+      return this.voiceBridge?.rejectAllAgentSuggestions();
+    },
+    close: () => {
+      this.agentReviewVisible = false;
+    }
+  };
+
+  private editorCommandName(command: AgentToolbarCommand) {
+    const names: Record<AgentToolbarCommand, string> = {
+      undo: 'undo',
+      redo: 'redo',
+      zoomOut: '',
+      zoomIn: '',
+      setParagraph: 'setParagraph',
+      setHeading1: 'setHeading',
+      setHeading2: 'setHeading',
+      setHeading3: 'setHeading',
+      blockquote: 'toggleBlockquote',
+      bold: 'toggleBold',
+      italic: 'toggleItalic',
+      strike: 'toggleStrike',
+      underline: 'toggleUnderline',
+      bulletList: 'toggleBulletList',
+      orderedList: 'toggleOrderedList',
+      alignLeft: 'setTextAlign',
+      alignCenter: 'setTextAlign',
+      alignRight: 'setTextAlign',
+      alignJustify: 'setTextAlign',
+      insertTable: 'insertTable'
+    };
+    return names[command];
+  }
+
+  private editorCommandArguments(command: AgentToolbarCommand): unknown | undefined {
+    switch (command) {
+      case 'setHeading1': return { level: 1 };
+      case 'setHeading2': return { level: 2 };
+      case 'setHeading3': return { level: 3 };
+      case 'alignLeft': return 'left';
+      case 'alignCenter': return 'center';
+      case 'alignRight': return 'right';
+      case 'alignJustify': return 'justify';
+      case 'insertTable': return { rows: 3, cols: 3, withHeaderRow: true };
+      default: return undefined;
+    }
+  }
+
+  private isZoomCommand(command: AgentToolbarCommand) {
+    return command === 'zoomIn' || command === 'zoomOut';
+  }
+
+  private supportsEditorCommand(command: AgentToolbarCommand) {
+    if (this.isZoomCommand(command)) return true;
+    const editor = this.textEditorElement?.editor;
+    const name = this.editorCommandName(command);
+    return Boolean(
+      editor &&
+        typeof (editor.commands as unknown as Record<string, unknown>)[name] ===
+          'function'
+    );
+  }
+
+  private canExecuteEditorCommand(command: AgentToolbarCommand) {
+    if (command === 'zoomIn') return this.editorZoom < 150;
+    if (command === 'zoomOut') return this.editorZoom > 50;
+    const editor = this.textEditorElement?.editor;
+    if (!editor || !this.supportsEditorCommand(command)) return false;
+    const name = this.editorCommandName(command);
+    const chain = editor.can().chain().focus() as unknown as Record<
+      string,
+      (...args: unknown[]) => { run: () => boolean }
+    >;
+    const action = chain[name];
+    if (typeof action !== 'function') return false;
+    const arguments_ = this.editorCommandArguments(command);
+    return arguments_ === undefined
+      ? action.call(chain).run()
+      : action.call(chain, arguments_).run();
+  }
+
+  private isEditorCommandActive(command: AgentToolbarCommand) {
+    const editor = this.textEditorElement?.editor;
+    if (!editor) return false;
+    const names: Partial<Record<AgentToolbarCommand, string>> = {
+      blockquote: 'blockquote',
+      bold: 'bold',
+      italic: 'italic',
+      strike: 'strike',
+      underline: 'underline',
+      bulletList: 'bulletList',
+      orderedList: 'orderedList'
+    };
+    const name = names[command];
+    if (name) return editor.isActive(name);
+    const alignment = this.editorCommandArguments(command);
+    return typeof alignment === 'string'
+      ? editor.isActive({ textAlign: alignment })
+      : false;
+  }
+
+  private getEditorBlockType(): AgentToolbarBlockType {
+    const editor = this.textEditorElement?.editor;
+    if (!editor) return 'paragraph';
+    for (const level of [1, 2, 3] as const) {
+      if (editor.isActive('heading', { level })) return `heading${level}` as AgentToolbarBlockType;
+    }
+    return 'paragraph';
+  }
+
+  private executeEditorCommand(command: AgentToolbarCommand) {
+    if (command === 'zoomIn' || command === 'zoomOut') {
+      const increment = command === 'zoomIn' ? 10 : -10;
+      this.editorZoom = Math.min(150, Math.max(50, this.editorZoom + increment));
+      this.agentToolbarRefresh += 1;
+      return;
+    }
+    const editor = this.textEditorElement?.editor;
+    if (!editor || !this.canExecuteEditorCommand(command)) return;
+    const name = this.editorCommandName(command);
+    const chain = editor.chain().focus() as unknown as Record<
+      string,
+      (...args: unknown[]) => { run: () => boolean }
+    >;
+    const action = chain[name];
+    if (typeof action !== 'function') return;
+    const arguments_ = this.editorCommandArguments(command);
+    if (arguments_ === undefined) action.call(chain).run();
+    else action.call(chain, arguments_).run();
+    this.requestUpdate();
+  }
+
+  private launchAgentSession() {
+    if (!this.agentController || this.agentController.state.phase === 'running') return;
+    void this.agentController.run({
+      instruction: 'Improve the selected text while preserving its meaning.',
+      context: this.voiceBridge?.getSnapshot().selection ? 'selection' : 'current-block'
+    });
   }
 
   private openVoiceDrawer() {
@@ -514,7 +805,7 @@ export class WordflowWordflow extends LitElement {
 
     // Get the line height in the editor element
     const lineHeight = parseInt(
-      window.getComputedStyle(editor.options.element).lineHeight
+      window.getComputedStyle(editor.view.dom).lineHeight
     );
 
     const PADDING_OFFSET = 5;
@@ -687,8 +978,13 @@ export class WordflowWordflow extends LitElement {
         </div>
 
         <div class="center-panel">
+          <top-writer-agent-toolbar
+            .controller=${this.agentToolbarController}
+            .refreshToken=${this.agentToolbarRefresh}
+          ></top-writer-agent-toolbar>
           <div class="editor-content">
             <wordflow-text-editor
+              .zoomPercent=${this.editorZoom}
               .popperSidebarBox=${this.popperSidebarBox}
               .floatingMenuBox=${this.floatingMenuBox}
               .updateSidebarMenu=${this.updateSidebarMenu}
@@ -704,6 +1000,11 @@ export class WordflowWordflow extends LitElement {
               }}
             ></wordflow-text-editor>
           </div>
+          <top-writer-agent-review-bar
+            ?hidden=${!this.agentReviewVisible}
+            .controller=${this.agentReviewController}
+            .refreshToken=${this.agentReviewRefresh}
+          ></top-writer-agent-review-bar>
           ${this.voiceController ? html`<top-writer-voice-player .controller=${this.voiceController}></top-writer-voice-player>` : null}
         </div>
 

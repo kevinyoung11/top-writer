@@ -1,5 +1,8 @@
 .wordflow {
+  --wordflow-header-height: 45px;
+
   width: 100%;
+  height: 100dvh;
   min-height: 100%;
 
   position: relative;
@@ -183,7 +186,7 @@
   .voice-entry-rail {
     position: fixed;
     right: max(12px, env(safe-area-inset-right));
-    bottom: calc(var(--voice-player-height, 72px) + 12px + env(safe-area-inset-bottom));
+    bottom: calc(var(--voice-player-height, 72px) + var(--agent-review-height, 0px) + 12px + env(safe-area-inset-bottom));
     z-index: 10;
     margin: 0;
   }
@@ -216,6 +219,7 @@
   grid-column: 2 / 3;
   width: 100%;
   height: 100%;
+  min-height: 0;
   border-left: 1px solid var(--gray-300);
   background: white;
   border-right: 1px solid var(--gray-300);
@@ -278,7 +282,7 @@
   .center {
     display: flex;
     width: 100%;
-    height: 100%;
+    height: var(--wordflow-header-height);
     padding: 8px 24px;
 
     border-left: 1px solid var(--gray-300);
@@ -338,12 +342,26 @@
   min-height: 0;
   overflow: auto;
   width: 100%;
-  height: 100%;
+  height: auto;
 
   & wordflow-text-editor {
     width: 100%;
     height: 100%;
   }
+}
+
+top-writer-agent-toolbar,
+top-writer-agent-review-bar {
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+top-writer-agent-toolbar {
+  margin-top: var(--wordflow-header-height);
+}
+
+top-writer-agent-review-bar[hidden] {
+  display: none;
 }
 
 top-writer-voice-player {

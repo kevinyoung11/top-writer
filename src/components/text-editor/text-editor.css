@@ -1,3 +1,80 @@
+/*
+ * Tiptap does not expose a public stylesheet for shadow roots. Keep the
+ * documented ProseMirror baseline locally instead of importing package internals.
+ */
+.ProseMirror {
+  position: relative;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  white-space: break-spaces;
+  -webkit-font-variant-ligatures: none;
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0;
+}
+
+.ProseMirror [contenteditable='false'] {
+  white-space: normal;
+}
+
+.ProseMirror [contenteditable='false'] [contenteditable='true'] {
+  white-space: pre-wrap;
+}
+
+.ProseMirror pre {
+  white-space: pre-wrap;
+}
+
+img.ProseMirror-separator {
+  display: inline !important;
+  border: none !important;
+  margin: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+.ProseMirror-gapcursor {
+  display: none;
+  pointer-events: none;
+  position: absolute;
+  margin: 0;
+}
+
+.ProseMirror-gapcursor:after {
+  content: '';
+  display: block;
+  position: absolute;
+  top: -2px;
+  width: 20px;
+  border-top: 1px solid black;
+  animation: ProseMirror-cursor-blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes ProseMirror-cursor-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+.ProseMirror-hideselection *::selection {
+  background: transparent;
+}
+
+.ProseMirror-hideselection *::-moz-selection {
+  background: transparent;
+}
+
+.ProseMirror-hideselection * {
+  caret-color: transparent;
+}
+
+.ProseMirror-focused .ProseMirror-gapcursor {
+  display: block;
+}
+
+.tippy-box[data-animation=fade][data-state=hidden] {
+  opacity: 0;
+}
+
 .text-editor-container {
   width: 100%;
   min-height: 100vh;
@@ -20,6 +97,8 @@
   width: 100%;
   height: 100%;
 
+  zoom: var(--editor-zoom, 1);
+
   display: flex;
   box-sizing: border-box;
 }
@@ -40,6 +119,31 @@
     height: 0;
     pointer-events: none;
   }
+}
+
+/* Ephemeral agent edits preserve the document until the user accepts them. */
+.agent-suggestion {
+  border-radius: 2px;
+  transition: outline-color 120ms ease, box-shadow 120ms ease;
+}
+
+.agent-suggestion-original {
+  color: #b42318;
+  background: #fff1f0;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.agent-suggestion-replacement {
+  color: #157f3d;
+  background: #e9f9ef;
+  text-decoration: none;
+}
+
+.agent-suggestion-current {
+  outline: 2px solid #7c3aed;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, #7c3aed 16%, transparent);
 }
 
 button {

@@ -1,0 +1,122 @@
+:host {
+  display: block;
+  border-bottom: 1px solid var(--gray-200, #e5e7eb);
+  background: color-mix(in srgb, white 94%, var(--gray-50, #f9fafb));
+}
+
+nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 42px;
+  padding: 5px 10px;
+  box-sizing: border-box;
+}
+
+.command-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.zoom-control {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.zoom-control output {
+  min-width: 46px;
+  color: var(--gray-600, #4b5563);
+  font-size: 13px;
+  text-align: center;
+}
+
+.block-type-control {
+  flex: 0 0 auto;
+}
+
+.block-type-control select {
+  min-height: 32px;
+  max-width: 112px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--gray-700, #374151);
+  font: inherit;
+  font-weight: 600;
+}
+
+.block-type-control select:hover,
+.block-type-control select:focus-visible {
+  border-color: var(--gray-300, #d1d5db);
+  background: var(--gray-100, #f3f4f6);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+button {
+  min-width: 32px;
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--gray-700, #374151);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  line-height: 1;
+}
+
+button:hover:not(:disabled),
+button[aria-pressed="true"] {
+  border-color: var(--gray-300, #d1d5db);
+  background: var(--gray-100, #f3f4f6);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--blue-500, #3b82f6);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: .42;
+}
+
+.agent-launch {
+  flex: 0 0 auto;
+  min-width: 66px;
+  padding: 0 10px;
+  border-color: var(--blue-500, #3b82f6);
+  background: var(--blue-500, #3b82f6);
+  color: white;
+}
+
+.agent-launch:hover:not(:disabled) {
+  border-color: var(--blue-600, #2563eb);
+  background: var(--blue-600, #2563eb);
+}
+
+@media (max-width: 699px) {
+  nav { padding-inline: 6px; }
+  .command-group { gap: 0; }
+  button { min-width: 36px; min-height: 36px; }
+  .zoom-control output,
+  .block-type-control { display: none; }
+}

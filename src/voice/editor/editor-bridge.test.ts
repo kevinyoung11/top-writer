@@ -9,9 +9,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Collapse } from "../../components/text-editor/collapse-node";
 import { EditHighlight } from "../../components/text-editor/edit-highlight";
 import { LoadingHighlight } from "../../components/text-editor/loading-highlight";
+import { openFormattingExtensions } from "../../components/text-editor/open-formatting-extensions";
 import type { ParagraphRef, RewritePreview, VoiceRange } from "../types";
 import { EditorBridge, type BridgeResult } from "./editor-bridge";
 import { VoiceHighlightExtension } from "./voice-highlight-extension";
+import { AgentSuggestionExtension } from "../../agent/agent-suggestion-extension";
+import { hashOriginalText } from "../../agent/edit-protocol";
+import type { AgentEditOperation } from "../../agent/types";
 
 const DEFAULT_CONTENT =
   "<p>第一段内容。</p><p>第二段谈用户信任。</p><p>第三段内容。</p>";
@@ -202,6 +206,53 @@ afterEach(() => {
 });
 
 describe("EditorBridge", () => {
+  it("creates a Tiptap editor and EditorBridge with the voice extensions", () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+
+    expect(editor.isDestroyed).toBe(false);
+    expect(
+      bridge.getSnapshot().paragraphs.map((paragraph) => paragraph.text),
+    ).toEqual(["第一段内容。", "第二段谈用户信任。", "第三段内容。"]);
+
+    bridge.destroy();
+  });
+
+  it("exposes reviewable agent suggestions through the bridge", async () => {
+    const editor = new Editor({
+      element: document.createElement("div"),
+      extensions: [StarterKit, VoiceHighlightExtension, AgentSuggestionExtension],
+      content: "<p>Alpha</p>",
+    });
+    document.body.append(editor.view.dom);
+    editors.push(editor);
+    const bridge = new EditorBridge(editor);
+    const paragraph = bridge.getSnapshot().paragraphs[0];
+    const hash = await hashOriginalText(paragraph.text);
+    if (!hash.ok) throw new Error(`Could not hash operation: ${hash.error.code}`);
+    const operation: AgentEditOperation = {
+      id: "agent-one",
+      type: "replaceRange",
+      revision: bridge.getRevision(),
+      from: paragraph.from,
+      to: paragraph.to,
+      originalTextHash: hash.hash,
+      replacement: "One",
+    };
+
+    expect(await bridge.addAgentSuggestions([operation])).toEqual({
+      ok: true,
+      value: ["agent-one"],
+    });
+    expect(bridge.currentAgentSuggestion()?.id).toBe("agent-one");
+    expect(bridge.acceptAgentSuggestion()).toEqual({
+      ok: true,
+      value: "agent-one",
+    });
+    expect(editor.getText()).toBe("One");
+    bridge.destroy();
+  });
+
   it("snapshots paragraphs, selection, cursor paragraph, and revision", () => {
     const editor = createEditor(
       "<h2>标题</h2><ul><li><p>嵌套段落</p><p></p></li></ul><p>结尾<br>换行</p>",
@@ -1254,6 +1305,30 @@ describe("EditorBridge", () => {
 
     textEditor.remove();
     expect(reconnectedEditor?.isDestroyed).toBe(true);
+  });
+
+  it("installs open-source underline, alignment, and table editing extensions", async () => {
+    const editor = new Editor({
+      element: document.createElement("div"),
+      extensions: [
+        StarterKit.configure({ underline: false }),
+        ...openFormattingExtensions,
+      ],
+      content: DEFAULT_CONTENT,
+    });
+    editors.push(editor);
+    const commands = editor.commands as unknown as Record<string, unknown>;
+    const commandChain = () => editor.chain() as unknown as Record<
+      string,
+      (...args: unknown[]) => { run: () => boolean }
+    >;
+    expect(commands.toggleUnderline).toBeTypeOf("function");
+    expect(commands.setTextAlign).toBeTypeOf("function");
+    expect(commands.insertTable).toBeTypeOf("function");
+
+    expect(commandChain().setTextAlign("center").run()).toBe(true);
+    expect(editor.isActive({ textAlign: "center" })).toBe(true);
+    expect(commandChain().insertTable({ rows: 2, cols: 2, withHeaderRow: true }).run()).toBe(true);
   });
 
   it("does not initialize while detached and initializes once after reconnect", async () => {

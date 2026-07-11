@@ -26,6 +26,7 @@ import { EditHighlight } from './edit-highlight';
 import { EventHandler } from './event-handler';
 import { LoadingHighlight } from './loading-highlight';
 import { SidebarMenu } from './sidebar-menu-plugin';
+import { openFormattingExtensions } from './open-formatting-extensions';
 
 // Types
 import type { ResolvedPos } from '@tiptap/pm/model';
@@ -36,6 +37,7 @@ import type { PromptModel, SimpleEventMessage } from '../../types/common-types';
 import type { PromptDataLocal } from '../../types/wordflow';
 import { EditorBridge } from '../../voice/editor/editor-bridge';
 import { VoiceHighlightExtension } from '../../voice/editor/voice-highlight-extension';
+import { AgentSuggestionExtension } from '../../agent/agent-suggestion-extension';
 import type { PromptManager } from '../wordflow/prompt-manager';
 import type {
   ToastMessage,
@@ -46,7 +48,6 @@ import type { EditHighlightAttributes } from './edit-highlight';
 import type { PopperOptions } from './sidebar-menu-plugin';
 
 // CSS
-import { style } from '../../../node_modules/@tiptap/core/src/style';
 import componentCSS from './text-editor.css?inline';
 
 const ADDED_COLOR = config.customColors.addedColor;
@@ -85,6 +86,10 @@ export class WordflowTextEditor extends LitElement {
 
   @property({ attribute: false })
   textGenerationService!: TextGenerationService;
+
+  /** The document's visual zoom, controlled by the outer Agent Editor toolbar. */
+  @property({ type: Number })
+  zoomPercent = 100;
 
   @query('.text-editor-container')
   containerElement: HTMLElement | undefined;
@@ -216,7 +221,8 @@ export class WordflowTextEditor extends LitElement {
     // Customize the StarterKit extension to exclude customized extensions
     const myStarterKit = StarterKit.configure({
       text: false,
-      paragraph: false
+      paragraph: false,
+      underline: false
     });
 
     const myEditHighlight = EditHighlight.configure({
@@ -274,13 +280,15 @@ export class WordflowTextEditor extends LitElement {
         myStarterKit,
         myParagraph,
         myText,
+        ...openFormattingExtensions,
         myEditHighlight,
         myLoadingHighlight,
         Collapse,
         mySidebarMenu,
         myEventHandler,
         myPlaceholder,
-        VoiceHighlightExtension
+        VoiceHighlightExtension,
+        AgentSuggestionExtension
       ],
       content: defaultText,
       autofocus: true
@@ -1140,7 +1148,10 @@ export class WordflowTextEditor extends LitElement {
   //                           Templates and Styles                           ||
   //==========================================================================||
   render() {
-    return html` <div class="text-editor-container">
+    return html` <div
+      class="text-editor-container"
+      style=${`--editor-zoom: ${Math.min(150, Math.max(50, this.zoomPercent)) / 100}`}
+    >
       <div
         class="text-editor"
         ?is-hovering-floating-menu=${this.isHoveringFloatingMenu}
@@ -1151,7 +1162,6 @@ export class WordflowTextEditor extends LitElement {
   static styles = [
     css`
       ${unsafeCSS(componentCSS)}
-      ${unsafeCSS(style)}
     `
   ];
 }

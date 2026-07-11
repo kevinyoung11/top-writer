@@ -367,6 +367,28 @@ export class VoiceCopilotController extends EventTarget {
     }
   }
 
+  /**
+   * Lets the shared Agent Editor review bar commit the active voice rewrite
+   * without bypassing the voice preview and undo bookkeeping.
+   */
+  acceptSharedReviewSuggestion(suggestionId?: string): boolean {
+    const preview = this.stateValue.preview;
+    const id = suggestionId ?? this.dependencies.editor.currentAgentSuggestion()?.id;
+    if (
+      !preview ||
+      preview.mode !== "rewrite" ||
+      id !== preview.id ||
+      !this.dependencies.editor
+        .listAgentSuggestions()
+        .some((suggestion) => suggestion.id === preview.id)
+    ) {
+      return false;
+    }
+
+    this.confirmPreview();
+    return this.stateValue.phase === "applied" && this.stateValue.preview === null;
+  }
+
   rejectPreview(): void {
     const preview = this.stateValue.preview;
     if (this.destroyed || !preview) return;
@@ -381,6 +403,28 @@ export class VoiceCopilotController extends EventTarget {
       errorCode: null,
       playback: this.idlePlayback(),
     });
+  }
+
+  /**
+   * Lets the shared Agent Editor review bar reject the active voice rewrite
+   * through the same cleanup path used by the voice panel.
+   */
+  rejectSharedReviewSuggestion(suggestionId?: string): boolean {
+    const preview = this.stateValue.preview;
+    const id = suggestionId ?? this.dependencies.editor.currentAgentSuggestion()?.id;
+    if (
+      !preview ||
+      preview.mode !== "rewrite" ||
+      id !== preview.id ||
+      !this.dependencies.editor
+        .listAgentSuggestions()
+        .some((suggestion) => suggestion.id === preview.id)
+    ) {
+      return false;
+    }
+
+    this.rejectPreview();
+    return this.stateValue.phase === "idle" && this.stateValue.preview === null;
   }
 
   requestUndo(): void {
@@ -763,7 +807,18 @@ export class VoiceCopilotController extends EventTarget {
         segments: buildDiffSegments(range.text, replacement),
         mode: "rewrite",
       };
-      const staged = this.dependencies.editor.stagePreview(preview);
+      const bridge = this.dependencies.editor as EditorBridge & {
+        stageVoiceRewriteSuggestion?: (
+          value: RewritePreview,
+        ) => Promise<ReturnType<EditorBridge["stagePreview"]>>;
+      };
+      const staged = bridge.stageVoiceRewriteSuggestion
+        ? await bridge.stageVoiceRewriteSuggestion(preview)
+        : bridge.stagePreview(preview);
+      if (!this.isOperationCurrent(token)) {
+        this.dependencies.editor.discardPreview(preview.id);
+        return false;
+      }
       if (!staged.ok) {
         this.setError(
           staged.reason === "stale-revision"
@@ -1057,10 +1112,26 @@ export class VoiceCopilotController extends EventTarget {
       this.ignoredSelfRevision = null;
       return;
     }
-    if (revision === this.stateValue.preview?.revision) return;
-    if (this.stateValue.preview) {
+    const preview = this.stateValue.preview;
+    if (revision === preview?.revision) return;
+    if (preview) {
+      const rebaseSharedVoicePreview = (
+        this.dependencies.editor as EditorBridge & {
+          rebaseSharedVoiceRewritePreview?: (
+            previewId: string,
+          ) => RewritePreview | null;
+        }
+      ).rebaseSharedVoiceRewritePreview;
+      const rebased = rebaseSharedVoicePreview?.call(
+        this.dependencies.editor,
+        preview.id,
+      );
+      if (rebased) {
+        this.transition({ preview: rebased });
+        return;
+      }
       this.failPreview(
-        this.stateValue.preview,
+        preview,
         "stale-preview",
         "正文已变化，改写预览已过期。",
       );

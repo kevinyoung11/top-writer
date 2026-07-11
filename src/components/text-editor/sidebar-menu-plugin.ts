@@ -232,7 +232,7 @@ export class SidebarMenuView implements PluginView {
       } else {
         this.mode = 'replace';
       }
-      const markElement = this.editor.options.element.querySelector(
+      const markElement = this.editor.view.dom.querySelector(
         `mark#${mark.attrs.id}`
       );
       this.curShownActiveID = mark.attrs.id as string;
@@ -267,7 +267,7 @@ export class SidebarMenuView implements PluginView {
         boxPosition = this.curBoxPosition;
       }
 
-      const nodeElement = this.editor.options.element.querySelector(
+      const nodeElement = this.editor.view.dom.querySelector(
         `span.collapse-item#${nodeAttrs.id}`
       );
       this.curShownActiveID = nodeAttrs.id as string;
@@ -306,7 +306,7 @@ export class SidebarMenuView implements PluginView {
         markCounter.replaceMarks.length > 0
       ) {
         const mark = markCounter.addMarks[0] || markCounter.replaceMarks[0];
-        nodeElement = this.editor.options.element.querySelector(
+        nodeElement = this.editor.view.dom.querySelector(
           `mark#${mark.attrs.id}`
         );
         this.curBoxPosition = boxPosition;
@@ -316,7 +316,7 @@ export class SidebarMenuView implements PluginView {
         }
       } else {
         const node = markCounter.deleteNodes[0];
-        nodeElement = this.editor.options.element.querySelector(
+        nodeElement = this.editor.view.dom.querySelector(
           `span.collapse-item#${node.attrs.id}`
         );
         this.curBoxPosition = boxPosition;
