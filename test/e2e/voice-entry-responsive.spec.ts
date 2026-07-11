@@ -34,18 +34,15 @@ async function expectWithinViewport(page: Page, selector: string) {
   expect(rect.bottom).toBeLessThanOrEqual(await page.evaluate(() => window.innerHeight));
 }
 
-async function expectNoSeriousAxeViolations(page: Page) {
-  const results = await new AxeBuilder({ page })
-    .withTags(["wcag2a", "wcag2aa"])
-    .analyze();
-  const blocking = results.violations.flatMap(({ impact, nodes }) =>
-    impact === "serious" || impact === "critical"
-      ? nodes.filter(({ target }) =>
-          /voice-copilot|voice-player|voice-entry/.test(
-            Array.isArray(target) ? target.join(" ") : target,
-          ),
-        )
-      : [],
+async function expectNoSeriousAxeViolations(
+  page: Page,
+  scopes: string[][],
+) {
+  const builder = new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa"]);
+  for (const scope of scopes) builder.include(scope);
+  const results = await builder.analyze();
+  const blocking = results.violations.filter(({ impact }) =>
+    impact === "serious" || impact === "critical",
   );
   expect(blocking).toEqual([]);
 }
@@ -61,7 +58,10 @@ for (const viewport of viewports) {
     await expect(player).toBeVisible();
     await expect(page.getByRole("dialog", { name: "语音副驾" })).toHaveCount(0);
     await expectNoHorizontalOverflow(page);
-    await expectNoSeriousAxeViolations(page);
+    await expectNoSeriousAxeViolations(page, [
+      ["wordflow-wordflow", "[data-voice-entry]"],
+      ["wordflow-wordflow", "top-writer-voice-player"],
+    ]);
 
     await entry.focus();
     await page.keyboard.press("Enter");
@@ -70,10 +70,14 @@ for (const viewport of viewports) {
     await expect(drawer).toBeVisible();
     await expect(page.getByRole("textbox", { name: "文字指令" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "语音副驾" })).toBeFocused();
+    await expect(player).toBeVisible();
+    await expect(page.getByRole("button", { name: "朗读当前段落" })).toBeVisible();
     await expectWithinViewport(page, "#voice-copilot-drawer");
     await expectWithinViewport(page, ".editor-content");
     await expectNoHorizontalOverflow(page);
-    await expectNoSeriousAxeViolations(page);
+    await expectNoSeriousAxeViolations(page, [
+      ["wordflow-wordflow", "#voice-copilot-drawer"],
+    ]);
 
     await page.keyboard.press("Escape");
     await expect(drawer).toHaveCount(0);
@@ -98,4 +102,26 @@ test("mobile bottom drawer closes from its backdrop while the player remains rea
   await expect(page.getByRole("dialog", { name: "语音副驾" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "朗读控制" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
+});
+
+test("documents the full-page serious and critical Axe baseline", async ({ page }) => {
+  await page.goto("/");
+
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa"])
+    .analyze();
+  const baseline = results.violations
+    .filter(({ impact }) => impact === "serious" || impact === "critical")
+    .map(({ id }) => id)
+    .sort();
+
+  // This is an unscoped inventory of pre-existing page violations. Voice drawer
+  // tests above use explicit shadow-DOM scope and must stay clear of this list.
+  expect(baseline).toEqual([
+    "aria-input-field-name",
+    "aria-tooltip-name",
+    "button-name",
+    "color-contrast",
+    "select-name",
+  ]);
 });
