@@ -140,7 +140,7 @@ const validateTarget = (
 };
 
 const hasNonPlainOutput = (output: string) => {
-  const fencedCodeBlock = /(?:^|\n)```[^\n]*(?:\n|$)/u;
+  const fencedCodeBlock = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})[^\n]*(?:\n|$)/u;
   const commentaryPrefix =
     /^(?:改写如下|修改如下|改写后(?:的)?(?:文本|版本)?|修改(?:后)?(?:的)?(?:文本|版本)?|(?:以下|这里)是(?:改写|修改)(?:后)?(?:的)?(?:文本|版本)?|建议(?:改写|修改)(?:为|如下)?)[：:]/u;
 

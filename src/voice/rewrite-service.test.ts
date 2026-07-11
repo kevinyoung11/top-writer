@@ -393,6 +393,8 @@ describe("RewriteService", () => {
     ["  选中片段\n", "unchanged-output"],
     ["```markdown\n改写后的文本\n```", "non-plain-output"],
     ["  ```markdown\n改写后的文本\n  ```", "non-plain-output"],
+    ["正常正文\n  ```ts\nconst x = 1\n  ```\n尾文", "non-plain-output"],
+    ["正常正文\n~~~\ncode\n~~~\n尾文", "non-plain-output"],
     ["改写如下：**新文本**", "non-plain-output"],
     ["改写如下：新文本", "non-plain-output"],
     ["以下是改写后的文本：新文本", "non-plain-output"],
@@ -422,6 +424,14 @@ describe("RewriteService", () => {
     "https://example.com/path 是裸链接文本。",
     "`行内字面量` 是可插入文本。",
   ])("accepts editor-insertable plain or literal text %s", async (output) => {
+    const generated = createGenerator(output);
+    const service = new RewriteService(generated.service);
+
+    await expect(service.rewrite(requestInput())).resolves.toBe(output);
+  });
+
+  it("treats fence markers indented by four spaces as literal text", async () => {
+    const output = "正常正文\n    ```ts\nconst x = 1\n    ```\n尾文";
     const generated = createGenerator(output);
     const service = new RewriteService(generated.service);
 
