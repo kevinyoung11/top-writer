@@ -8,9 +8,18 @@ const rewritePattern = /改|润色|调整|压缩|精简/;
 const editorTargetSource =
   "(?:这(?:一)?(?:段|部分)|当前(?:这)?(?:一)?(?:段|部分)|选中(?:的)?(?:内容|文字|部分)?|第\\s*[^，,；;。！？!?\\s]+\\s*段|上一段|前一段|下一段|后一段|全文|全部)";
 const directRewritePattern = new RegExp(
-  `^(?:请\\s*)?(?:(?:改写|改|润色|调整|压缩|精简)(?=$|\\s*(?:一下|${editorTargetSource}))|(?:把|将).+(?:改写|改得|改成|改|润色|调整|压缩|精简))`,
+  `^(?:请\\s*)?(?:改写|改|润色|调整|压缩|精简)(?=$|\\s*(?:一下|${editorTargetSource}))`,
   "u",
 );
+const rewriteConstructionPattern =
+  /^(?:请\s*)?(?:把|将).+(?:改写|改得|改成|改为|改|润色|调整|压缩|精简)/u;
+const constraintLedRewritePatterns = [
+  /^(?:请\s*)?(?:改得|改成|改为)([\s\S]+)$/u,
+  /^(?:请\s*)?(?:压缩|精简)(?:到|为)([\s\S]+)$/u,
+  /^(?:请\s*)?调整(?:到|为)([\s\S]+)$/u,
+];
+const safeAdjustmentPattern =
+  /^(?:请\s*)?调整(?:语气|结构|顺序|措辞|表达|风格|长度|节奏)(?=$|[\s，,；;。！？!?]|为|到|得|更)/u;
 const compoundRewritePattern = /^(?:改写|改得|改成|改|润色|调整|压缩|精简)/;
 const compoundReadPattern =
   /^(?:朗读|读|念)(?:一下|一遍)?(?=$|[\s，,；;。！？!?]|然后|再)/;
@@ -38,24 +47,69 @@ const normalize = (value: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+const paragraphScope = (rawIndex: string): VoiceScope | null => {
+  const value = rawIndex.trim();
+  if (!/^\d+$/.test(value)) return null;
+
+  const oneBasedIndex = Number(value);
+  return Number.isSafeInteger(oneBasedIndex) && oneBasedIndex >= 1
+    ? { kind: "paragraph", index: oneBasedIndex - 1 }
+    : null;
+};
+
 const readScope = (text: string): VoiceScope | null => {
   const numbered = text.match(/第\s*([\s\S]*?)\s*段/);
-  if (numbered) {
-    const rawIndex = numbered[1].trim();
-    if (!/^\d+$/.test(rawIndex)) return null;
-
-    const oneBasedIndex = Number(rawIndex);
-
-    return Number.isSafeInteger(oneBasedIndex) && oneBasedIndex >= 1
-      ? { kind: "paragraph", index: oneBasedIndex - 1 }
-      : null;
-  }
+  if (numbered) return paragraphScope(numbered[1]);
 
   if (/从头|全文|全部/.test(text)) return { kind: "document" };
   if (/选中/.test(text)) return { kind: "selection" };
   if (/上一段|前一段/.test(text)) return { kind: "previous" };
   if (/下一段|后一段/.test(text)) return { kind: "next" };
   return { kind: "current" };
+};
+
+const hasMeaningfulComplement = (value: string) => /[\p{L}\p{N}]/u.test(value);
+
+const isDirectRewriteCommand = (text: string) => {
+  if (
+    directRewritePattern.test(text) ||
+    rewriteConstructionPattern.test(text) ||
+    safeAdjustmentPattern.test(text)
+  ) {
+    return true;
+  }
+
+  return constraintLedRewritePatterns.some((pattern) => {
+    const match = text.match(pattern);
+    return Boolean(match && hasMeaningfulComplement(match[1]));
+  });
+};
+
+const rewriteTarget = (text: string) => {
+  const command = text.replace(/^请\s*/, "");
+  const construction = command.match(/^(?:把|将)\s*([\s\S]*)$/u);
+  if (construction) return construction[1].trimStart();
+
+  const direct = command.match(/^(?:改写|改|润色|调整|压缩|精简)/u);
+  if (!direct) return "";
+
+  let target = command.slice(direct[0].length).trimStart();
+  if (target.startsWith("一下")) target = target.slice(2).trimStart();
+  return target;
+};
+
+const rewriteScope = (text: string): VoiceScope | null => {
+  const target = rewriteTarget(text);
+
+  if (target.startsWith("第")) {
+    const numbered = target.match(/^第\s*([\s\S]*?)\s*段/);
+    return numbered ? paragraphScope(numbered[1]) : null;
+  }
+  if (/^选中/.test(target)) return { kind: "selection" };
+  if (/^(?:上一段|前一段)/.test(target)) return { kind: "previous" };
+  if (/^(?:下一段|后一段)/.test(target)) return { kind: "next" };
+  if (/^(?:全文|全部)/.test(target)) return { kind: "document" };
+  return { kind: "effective" };
 };
 
 const normalizeSemanticQuery = (value: string) =>
@@ -144,14 +198,15 @@ export const parseVoicePlan = (rawTranscript: string): VoicePlan => {
     } else if (directReadPattern.test(transcript)) {
       const scope = readScope(transcript);
       if (scope) actions.push({ intent: "read", scope, constraints: [] });
-    } else if (directRewritePattern.test(transcript)) {
-      actions.push({
-        intent: "rewrite",
-        scope: /选中/.test(transcript)
-          ? { kind: "selection" }
-          : { kind: "effective" },
-        constraints: [transcript],
-      });
+    } else if (isDirectRewriteCommand(transcript)) {
+      const scope = rewriteScope(transcript);
+      if (scope) {
+        actions.push({
+          intent: "rewrite",
+          scope,
+          constraints: [transcript],
+        });
+      }
     }
   }
 

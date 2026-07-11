@@ -170,6 +170,66 @@ describe("parseVoicePlan", () => {
     },
   );
 
+  it.each([
+    "改得更直接",
+    "改成更口语",
+    "改为更简洁",
+    "压缩到200字",
+    "精简为三句话",
+    "调整语气",
+    "调整为更正式",
+  ])("parses a constraint-led rewrite command: %s", (transcript) => {
+    expect(parseVoicePlan(transcript).actions).toEqual([
+      {
+        intent: "rewrite",
+        scope: { kind: "effective" },
+        constraints: [transcript],
+      },
+    ]);
+  });
+
+  it.each(["改得", "改成", "改为", "改得，", "压缩到", "精简为", "调整为"])(
+    "rejects a rewrite command with an empty complement: %s",
+    (transcript) => {
+      expect(parseVoicePlan(transcript)).toMatchObject({
+        confidence: 0,
+        actions: [],
+      });
+    },
+  );
+
+  it.each([
+    ["改第5段", { kind: "paragraph", index: 4 }],
+    ["把第5段改得更直接", { kind: "paragraph", index: 4 }],
+    ["改上一段", { kind: "previous" }],
+    ["改下一段", { kind: "next" }],
+    ["改全文", { kind: "document" }],
+    ["改选中内容", { kind: "selection" }],
+  ])("preserves the explicit rewrite scope in %s", (transcript, scope) => {
+    expect(parseVoicePlan(transcript).actions).toEqual([
+      {
+        intent: "rewrite",
+        scope,
+        constraints: [transcript],
+      },
+    ]);
+  });
+
+  it.each([
+    "改第零段",
+    "改第0段",
+    "改第-1段",
+    "改第1.5段",
+    "改第9007199254740992段",
+    "把第零段改得更直接",
+    "把第5改得更直接",
+  ])("rejects an invalid explicit rewrite target in %s", (transcript) => {
+    expect(parseVoicePlan(transcript)).toMatchObject({
+      confidence: 0,
+      actions: [],
+    });
+  });
+
   it.each(["调整型基金风险很高", "压缩空气储能很重要", "精简版已经发布"])(
     "does not treat a rewrite-verb noun prefix as a command: %s",
     (transcript) => {
