@@ -38,6 +38,8 @@ import type { GptModel, TextGenMessage } from '../../llms/gpt';
 import type { TextGenLocalWorkerMessage } from '../../llms/web-llm';
 import type { PromptModel, SimpleEventMessage } from '../../types/common-types';
 import type { PromptDataLocal } from '../../types/wordflow';
+import { EditorBridge } from '../../voice/editor/editor-bridge';
+import { VoiceHighlightExtension } from '../../voice/editor/voice-highlight-extension';
 import type { PromptManager } from '../wordflow/prompt-manager';
 import type {
   ToastMessage,
@@ -97,13 +99,11 @@ export class WordflowTextEditor extends LitElement {
   @query('.text-editor')
   editorElement: HTMLElement | undefined;
 
-  @query('.select-menu')
-  selectMenuElement: HTMLElement | undefined;
-
   @state()
   isHoveringFloatingMenu = false;
 
   editor: Editor | null = null;
+  private editorBridge: EditorBridge | null = null;
   curEditID = 0;
 
   containerBBox: DOMRect = {
@@ -123,6 +123,21 @@ export class WordflowTextEditor extends LitElement {
   //==========================================================================||
   constructor() {
     super();
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    void this.updateComplete.then(() => {
+      if (this.isConnected && this.editor === null) this.initEditor();
+    });
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.editorBridge?.destroy();
+    this.editorBridge = null;
+    this.editor?.destroy();
+    this.editor = null;
   }
 
   firstUpdated() {
@@ -159,9 +174,10 @@ export class WordflowTextEditor extends LitElement {
   }
 
   initEditor() {
+    if (this.editor !== null) return;
+
     if (
       this.editorElement === undefined ||
-      this.selectMenuElement === undefined ||
       this.containerElement === undefined ||
       this.floatingMenuBox === undefined ||
       this.popperSidebarBox === undefined ||
@@ -271,11 +287,21 @@ export class WordflowTextEditor extends LitElement {
         Collapse,
         mySidebarMenu,
         myEventHandler,
-        myPlaceholder
+        myPlaceholder,
+        VoiceHighlightExtension
       ],
       content: defaultText,
       autofocus: true
     });
+
+    this.editorBridge = new EditorBridge(this.editor);
+    this.dispatchEvent(
+      new CustomEvent<EditorBridge>('editor-bridge-ready', {
+        bubbles: true,
+        composed: true,
+        detail: this.editorBridge
+      })
+    );
   }
 
   /**
@@ -288,6 +314,10 @@ export class WordflowTextEditor extends LitElement {
   //                              Custom Methods                              ||
   //==========================================================================||
   async initData() {}
+
+  getVoiceEditorBridge() {
+    return this.editorBridge;
+  }
 
   diffParagraph(oldText: string, newText: string) {
     // const differences = diff_wordMode_(oldText, newText);
