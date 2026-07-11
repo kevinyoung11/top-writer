@@ -1,5 +1,11 @@
 import type { VoiceRange } from "../types";
-import type { SpeechChunk, SpeechSynthesizer, SynthesisOptions } from "./types";
+import type {
+  SpeechChunk,
+  SpeechSynthesizer,
+  SpeechVoiceCatalog,
+  SpeechVoiceOption,
+  SynthesisOptions,
+} from "./types";
 
 const SENTENCE_ENDINGS = new Set(["。", "！", "？", "!", "?", "；", ";"]);
 const SENTENCE_CLOSERS = new Set([
@@ -254,7 +260,9 @@ const readDefaultRuntime = (): BrowserSpeechSynthesisRuntime => {
   }
 };
 
-export class BrowserSpeechSynthesizer implements SpeechSynthesizer {
+export class BrowserSpeechSynthesizer
+  implements SpeechSynthesizer, SpeechVoiceCatalog
+{
   readonly supported: boolean;
 
   private readonly synthesis: SpeechSynthesisLike | null;
@@ -264,6 +272,17 @@ export class BrowserSpeechSynthesizer implements SpeechSynthesizer {
   private generation = 0;
   private speakInvocation = 0;
   private active: PlaybackSession | null = null;
+  private readonly voiceCatalogListeners = new Set<
+    (voices: readonly SpeechVoiceOption[]) => void
+  >();
+  private catalogNativeListenerAttached = false;
+  private readonly onCatalogVoicesChanged = () => {
+    const snapshot = this.voices;
+    for (const listener of [...this.voiceCatalogListeners]) {
+      if (!this.voiceCatalogListeners.has(listener)) continue;
+      invoke(() => listener(snapshot));
+    }
+  };
 
   constructor(runtime: BrowserSpeechSynthesisRuntime = readDefaultRuntime()) {
     this.synthesis = runtime.speechSynthesis ?? null;
@@ -279,6 +298,40 @@ export class BrowserSpeechSynthesizer implements SpeechSynthesizer {
       ((handle) =>
         globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>));
     this.supported = this.synthesis !== null && this.Utterance !== null;
+  }
+
+  get voices(): readonly SpeechVoiceOption[] {
+    if (!this.supported) return Object.freeze([]) as readonly SpeechVoiceOption[];
+
+    const voices = this.getVoices().map((voice) =>
+      Object.freeze({
+        voiceURI: voice.voiceURI,
+        name: voice.name,
+        lang: voice.lang,
+        default: voice.default,
+      }),
+    );
+    return Object.freeze(voices);
+  }
+
+  subscribeVoicesChanged(
+    listener: (voices: readonly SpeechVoiceOption[]) => void,
+  ): () => void {
+    if (typeof listener !== "function" || !this.supported || !this.synthesis) {
+      return () => {};
+    }
+
+    this.voiceCatalogListeners.add(listener);
+    this.attachCatalogListener();
+    invoke(() => listener(this.voices));
+
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      this.voiceCatalogListeners.delete(listener);
+      if (this.voiceCatalogListeners.size === 0) this.detachCatalogListener();
+    };
   }
 
   speak(chunks: SpeechChunk[], options: SynthesisOptions): Promise<void> {
@@ -455,6 +508,29 @@ export class BrowserSpeechSynthesizer implements SpeechSynthesizer {
       return Array.isArray(voices) ? voices : [];
     } catch {
       return [];
+    }
+  }
+
+  private attachCatalogListener(): void {
+    if (this.catalogNativeListenerAttached || !this.synthesis) return;
+    try {
+      this.synthesis.addEventListener("voiceschanged", this.onCatalogVoicesChanged);
+      this.catalogNativeListenerAttached = true;
+    } catch {
+      this.catalogNativeListenerAttached = false;
+    }
+  }
+
+  private detachCatalogListener(): void {
+    if (!this.catalogNativeListenerAttached) return;
+    this.catalogNativeListenerAttached = false;
+    try {
+      this.synthesis?.removeEventListener(
+        "voiceschanged",
+        this.onCatalogVoicesChanged,
+      );
+    } catch {
+      // The catalog no longer owns a listener even if the browser rejects cleanup.
     }
   }
 

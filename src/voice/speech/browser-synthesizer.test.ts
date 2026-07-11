@@ -10,6 +10,10 @@ import {
   SpeechCancelledError,
   splitRangeIntoSpeechChunks,
 } from "./browser-synthesizer";
+import {
+  filterVoicesForLanguage,
+  type SpeechVoiceOption,
+} from "./types";
 
 const voice = (
   voiceURI: string,
@@ -453,6 +457,65 @@ describe("splitRangeIntoSpeechChunks", () => {
 });
 
 describe("BrowserSpeechSynthesizer", () => {
+  it("publishes immutable data-only voice snapshots and shares one native catalog listener", () => {
+    const first = voice("mandarin", "zh-CN", true);
+    const second = voice("english", "en-US");
+    const { speechSynthesis, synthesizer } = createHarness([first, second]);
+    const updates: SpeechVoiceOption[][] = [];
+    const secondUpdates: SpeechVoiceOption[][] = [];
+
+    const unsubscribeFirst = synthesizer.subscribeVoicesChanged((voices) => {
+      updates.push([...voices]);
+    });
+    const unsubscribeSecond = synthesizer.subscribeVoicesChanged((voices) => {
+      secondUpdates.push([...voices]);
+      throw new Error("consumer failure must be isolated");
+    });
+
+    expect(synthesizer.voices).toEqual([
+      { voiceURI: "mandarin", name: "mandarin", lang: "zh-CN", default: true },
+      { voiceURI: "english", name: "english", lang: "en-US", default: false },
+    ]);
+    expect(Object.isFrozen(synthesizer.voices)).toBe(true);
+    expect(Object.isFrozen(synthesizer.voices[0])).toBe(true);
+    expect(speechSynthesis.addEventListener).toHaveBeenCalledTimes(1);
+    expect(updates).toHaveLength(1);
+    expect(secondUpdates).toHaveLength(1);
+
+    speechSynthesis.voices = [voice("simplified", "zh_Hans_CN")];
+    speechSynthesis.emitVoicesChanged();
+    expect(updates.at(-1)).toEqual([
+      { voiceURI: "simplified", name: "simplified", lang: "zh_Hans_CN", default: false },
+    ]);
+    expect(secondUpdates).toHaveLength(2);
+
+    unsubscribeFirst();
+    expect(speechSynthesis.removeEventListener).not.toHaveBeenCalled();
+    unsubscribeSecond();
+    unsubscribeSecond();
+    expect(speechSynthesis.removeEventListener).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns no catalog voices when synthesis is unsupported and filters zh-CN regions", () => {
+    const unsupported = new BrowserSpeechSynthesizer({
+      speechSynthesis: new FakeSpeechSynthesis([voice("mandarin", "zh-CN")]),
+      SpeechSynthesisUtterance: null,
+    });
+    expect(unsupported.voices).toEqual([]);
+    expect(() => unsupported.subscribeVoicesChanged(vi.fn())).not.toThrow();
+
+    const options: SpeechVoiceOption[] = [
+      { voiceURI: "cn", name: "CN", lang: "zh-CN", default: false },
+      { voiceURI: "hans", name: "Hans", lang: "zh_Hans_CN", default: false },
+      { voiceURI: "tw", name: "TW", lang: "zh-TW", default: false },
+      { voiceURI: "bare", name: "Bare", lang: "zh", default: false },
+    ];
+    expect(filterVoicesForLanguage(options, "ZH_cn").map((voice) => voice.voiceURI)).toEqual([
+      "cn",
+      "hans",
+    ]);
+  });
+
   it("speaks in order, reports each chunk immediately before speak, and resolves last", async () => {
     const selectedVoice = voice("mandarin", "zh-CN", true);
     const { speechSynthesis, synthesizer } = createHarness([selectedVoice]);
