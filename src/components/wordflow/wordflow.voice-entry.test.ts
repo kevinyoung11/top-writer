@@ -74,6 +74,10 @@ describe("wordflow voice entry", () => {
   beforeAll(async () => {
     vi.stubGlobal("localStorage", createMemoryStorage());
     vi.stubGlobal("Worker", WorkerStub);
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: () => false
+    });
     (
       globalThis as typeof globalThis & { litIssuedWarnings: Set<string> }
     ).litIssuedWarnings = new Set(["dev-mode"]);
@@ -131,6 +135,20 @@ describe("wordflow voice entry", () => {
     expect(root.shadowRoot?.activeElement).toBe(trigger);
   });
 
+  it("moves focus to the voice panel heading when the drawer opens", async () => {
+    root.shadowRoot
+      ?.querySelector<HTMLButtonElement>("[data-voice-entry]")
+      ?.click();
+    await root.updateComplete;
+    const panel = root.shadowRoot?.querySelector("top-writer-voice-copilot") as
+      | (HTMLElement & { updateComplete: Promise<boolean> })
+      | null;
+    await panel?.updateComplete;
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(panel?.shadowRoot?.activeElement?.textContent).toBe("语音副驾");
+  });
+
   it.each([
     ["Escape", "keydown"],
     ["backdrop", "click"]
@@ -142,9 +160,16 @@ describe("wordflow voice entry", () => {
     expect(root.shadowRoot?.querySelector("#voice-copilot-drawer")).not.toBeNull();
 
     if (eventName === "keydown") {
-      root.shadowRoot
-        ?.querySelector("#voice-copilot-drawer")
-        ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      const panel = root.shadowRoot?.querySelector("top-writer-voice-copilot");
+      const input = panel?.shadowRoot?.querySelector<HTMLInputElement>("input");
+      input?.focus();
+      input?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          composed: true
+        })
+      );
     } else {
       root.shadowRoot
         ?.querySelector(".voice-drawer-backdrop")
@@ -153,6 +178,36 @@ describe("wordflow voice entry", () => {
 
     await root.updateComplete;
     expect(root.shadowRoot?.querySelector("#voice-copilot-drawer")).toBeNull();
+  });
+
+  it("traps composed Tab and Shift+Tab within the voice drawer", async () => {
+    root.shadowRoot
+      ?.querySelector<HTMLButtonElement>("[data-voice-entry]")
+      ?.click();
+    await root.updateComplete;
+    const close = root.shadowRoot?.querySelector<HTMLButtonElement>(
+      "[aria-label='关闭语音副驾']"
+    )!;
+    const panel = root.shadowRoot?.querySelector("top-writer-voice-copilot");
+    const send = panel?.shadowRoot?.querySelector<HTMLButtonElement>(
+      "button[type=submit]"
+    )!;
+
+    send.focus();
+    send.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true })
+    );
+    expect(root.shadowRoot?.activeElement).toBe(close);
+
+    close.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Tab",
+        shiftKey: true,
+        bubbles: true,
+        composed: true
+      })
+    );
+    expect(panel?.shadowRoot?.activeElement).toBe(send);
   });
 
   it("reuses the existing controller and only cancels an active listening session", async () => {

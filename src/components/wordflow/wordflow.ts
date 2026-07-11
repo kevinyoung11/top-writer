@@ -71,6 +71,14 @@ const defaultPrompts = defaultPromptsJSON as PromptDataLocal[];
 
 // Constants
 const MENU_X_OFFSET = config.layout.sidebarMenuXOffset;
+const DRAWER_FOCUSABLE_SELECTOR = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])'
+].join(',');
 
 export interface UpdateSidebarMenuProps {
   anchor: Element | VirtualElement;
@@ -307,9 +315,51 @@ export class WordflowWordflow extends LitElement {
   }
 
   private drawerKeydown(event: KeyboardEvent) {
-    if (event.key !== 'Escape') return;
-    event.preventDefault();
-    this.closeVoiceDrawer();
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      this.closeVoiceDrawer();
+      return;
+    }
+
+    if (event.key !== 'Tab') return;
+    const drawer = event.currentTarget as HTMLElement;
+    const focusable = this.drawerFocusableElements(drawer);
+    if (focusable.length === 0) return;
+
+    const active = this.drawerActiveElement();
+    const activeIndex = focusable.indexOf(active as HTMLElement);
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const shouldWrapBackward = event.shiftKey && activeIndex <= 0;
+    const shouldWrapForward = !event.shiftKey && activeIndex >= focusable.length - 1;
+
+    if (shouldWrapBackward) {
+      event.preventDefault();
+      last.focus();
+    } else if (shouldWrapForward) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  private drawerFocusableElements(drawer: HTMLElement): HTMLElement[] {
+    const focusable: HTMLElement[] = [];
+    const collect = (root: ParentNode) => {
+      root.querySelectorAll<HTMLElement>('*').forEach(element => {
+        if (element.matches(DRAWER_FOCUSABLE_SELECTOR)) focusable.push(element);
+        if (element.shadowRoot) collect(element.shadowRoot);
+      });
+    };
+    collect(drawer);
+    return focusable;
+  }
+
+  private drawerActiveElement(): Element | null {
+    let active = this.shadowRoot?.activeElement ?? document.activeElement;
+    while (active?.shadowRoot?.activeElement) {
+      active = active.shadowRoot.activeElement;
+    }
+    return active;
   }
 
   private drawerBackdropClick(event: MouseEvent) {
