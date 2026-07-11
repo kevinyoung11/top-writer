@@ -202,6 +202,18 @@ afterEach(() => {
 });
 
 describe("EditorBridge", () => {
+  it("creates a Tiptap editor and EditorBridge with the voice extensions", () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+
+    expect(editor.isDestroyed).toBe(false);
+    expect(
+      bridge.getSnapshot().paragraphs.map((paragraph) => paragraph.text),
+    ).toEqual(["第一段内容。", "第二段谈用户信任。", "第三段内容。"]);
+
+    bridge.destroy();
+  });
+
   it("snapshots paragraphs, selection, cursor paragraph, and revision", () => {
     const editor = createEditor(
       "<h2>标题</h2><ul><li><p>嵌套段落</p><p></p></li></ul><p>结尾<br>换行</p>",

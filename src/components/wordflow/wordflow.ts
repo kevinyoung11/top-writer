@@ -514,7 +514,7 @@ export class WordflowWordflow extends LitElement {
 
     // Get the line height in the editor element
     const lineHeight = parseInt(
-      window.getComputedStyle(editor.options.element).lineHeight
+      window.getComputedStyle(editor.view.dom).lineHeight
     );
 
     const PADDING_OFFSET = 5;

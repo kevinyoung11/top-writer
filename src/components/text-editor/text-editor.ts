@@ -46,7 +46,6 @@ import type { EditHighlightAttributes } from './edit-highlight';
 import type { PopperOptions } from './sidebar-menu-plugin';
 
 // CSS
-import { style } from '../../../node_modules/@tiptap/core/src/style';
 import componentCSS from './text-editor.css?inline';
 
 const ADDED_COLOR = config.customColors.addedColor;
@@ -1151,7 +1150,6 @@ export class WordflowTextEditor extends LitElement {
   static styles = [
     css`
       ${unsafeCSS(componentCSS)}
-      ${unsafeCSS(style)}
     `
   ];
 }
