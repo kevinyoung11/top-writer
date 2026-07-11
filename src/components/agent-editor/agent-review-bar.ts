@@ -44,6 +44,34 @@ export class AgentReviewBar extends LitElement {
     this.requestUpdate();
   }
 
+  /**
+   * Review shortcuts deliberately live on the review region rather than the
+   * editor or document. That keeps ordinary typing, browser shortcuts, and
+   * the native keyboard behavior of the action buttons untouched.
+   */
+  private reviewKeydown(event: KeyboardEvent) {
+    if (
+      event.target !== event.currentTarget ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      !this.controller ||
+      !this.currentId
+    ) return;
+
+    const action = {
+      ArrowLeft: () => this.controller?.previousAgentSuggestion(),
+      ArrowRight: () => this.controller?.nextAgentSuggestion(),
+      a: () => this.controller?.acceptAgentSuggestion(),
+      r: () => this.controller?.rejectAgentSuggestion(),
+    }[event.key];
+    if (!action) return;
+
+    event.preventDefault();
+    this.act(action);
+  }
+
   render() {
     const suggestions = this.suggestions();
     const hasCurrent = this.currentId !== null && suggestions.length > 0;
@@ -52,7 +80,12 @@ export class AgentReviewBar extends LitElement {
     const disabled = !this.controller || !hasCurrent;
 
     return html`
-      <section aria-label="AI suggestion review">
+      <section
+        aria-label="AI suggestion review"
+        aria-keyshortcuts="ArrowLeft ArrowRight A R"
+        tabindex="0"
+        @keydown=${this.reviewKeydown}
+      >
         <div class="count" aria-live="polite">Suggestion ${count}</div>
         <div class="navigation" role="group" aria-label="Suggestion navigation">
           <button type="button" aria-label="Previous suggestion" ?disabled=${disabled}

@@ -65,6 +65,26 @@ describe("AgentReviewBar", () => {
     expect(facade.close).toHaveBeenCalledOnce();
   });
 
+  it("handles review shortcuts only while its review region owns focus", async () => {
+    const region = reviewBar.shadowRoot?.querySelector<HTMLElement>("section");
+    const outsideEditor = document.createElement("div");
+    outsideEditor.contentEditable = "true";
+    document.body.append(outsideEditor);
+
+    region?.focus();
+    expect(reviewBar.shadowRoot?.activeElement).toBe(region);
+
+    region?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await reviewBar.updateComplete;
+    expect(facade.nextAgentSuggestion).toHaveBeenCalledOnce();
+
+    region?.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+    expect(facade.acceptAgentSuggestion).toHaveBeenCalledOnce();
+
+    outsideEditor.dispatchEvent(new KeyboardEvent("keydown", { key: "r", bubbles: true }));
+    expect(facade.rejectAgentSuggestion).not.toHaveBeenCalled();
+  });
+
   it("disables review actions when no current suggestion is available", async () => {
     facade.listAgentSuggestions = vi.fn(() => []);
     facade.currentAgentSuggestion = vi.fn(() => null);

@@ -93,6 +93,34 @@ test("runs the visible Ask AI flow through protocol validation and reviews each 
   await expect(page.locator(".ProseMirror")).not.toContainText("Agent rewrite 6.");
 });
 
+test("reviews suggestions by keyboard without taking over editor typing keys", async ({ page }) => {
+  await installAgentModel(page);
+  await freshPage(page);
+
+  await askForParagraph(page, 0);
+  await askForParagraph(page, 1);
+  await expect(page.getByText("Suggestion 1 of 2")).toBeVisible();
+
+  const editor = page.locator(".ProseMirror");
+  await editor.focus();
+  await editor.press("ArrowRight");
+  await expect(page.getByText("Suggestion 1 of 2")).toBeVisible();
+
+  const review = page.locator("top-writer-agent-review-bar").locator("section");
+  await review.focus();
+  await review.press("ArrowRight");
+  await expect(page.getByText("Suggestion 2 of 2")).toBeVisible();
+  await review.press("a");
+  await expect(page.getByText("Suggestion 1 of 1")).toBeVisible();
+  await expect(editor).toContainText("Agent rewrite 2.");
+
+  const reject = page.getByRole("button", { name: "Reject suggestion" });
+  await reject.focus();
+  await reject.press("Enter");
+  await expect(page.getByText("Suggestion 0 of 0")).toBeVisible();
+  await expect(editor).not.toContainText("Agent rewrite 1.");
+});
+
 test("drops a delayed Ask AI response after the document revision changes", async ({ page }) => {
   let requested = false;
   await page.route(wordflowApi, async (route) => {
