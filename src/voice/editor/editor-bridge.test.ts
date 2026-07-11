@@ -465,6 +465,76 @@ describe("EditorBridge", () => {
     expect(calls).toEqual(["first", "third"]);
   });
 
+  it("isolates a throwing revision listener during voice apply and undo", () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+    const originalDocument = editor.getJSON();
+    const deliveredRevisions: number[] = [];
+    const rewrite = makePreview(
+      rangeForParagraph(bridge, 1),
+      "即使监听器失败也要安全应用",
+      "throwing-listener-rewrite",
+    );
+
+    bridge.onRevisionChange(() => {
+      throw new Error("listener failure");
+    });
+    bridge.onRevisionChange((revision) => {
+      deliveredRevisions.push(revision);
+    });
+    expectOk(bridge.stagePreview(rewrite));
+
+    expect(() => expectOk(bridge.applyReplacement(rewrite.id))).not.toThrow();
+    expect(bridge.getSnapshot().paragraphs[1].text).toBe(
+      rewrite.replacementText,
+    );
+    expect(bridge.getRevision()).toBe(1);
+    expect(deliveredRevisions).toEqual([1]);
+
+    const inverse = expectOk(bridge.previewUndoLastVoiceEdit());
+    expect(() => expectOk(bridge.undoLastVoiceEdit(inverse.id))).not.toThrow();
+    expect(editor.getJSON()).toEqual(originalDocument);
+    expect(bridge.getRevision()).toBe(2);
+    expect(deliveredRevisions).toEqual([1, 2]);
+    expect(bridge.previewUndoLastVoiceEdit()).toEqual({
+      ok: false,
+      reason: "nothing-to-undo",
+    });
+
+    bridge.destroy();
+  });
+
+  it("never delivers an obsolete revision after a nested document change", () => {
+    const editor = createEditor();
+    const bridge = new EditorBridge(editor);
+    const firstListenerRevisions: number[] = [];
+    const secondListenerRevisions: number[] = [];
+
+    bridge.onRevisionChange((revision) => {
+      firstListenerRevisions.push(revision);
+      if (revision === 1) {
+        const nestedParagraph = bridge.getSnapshot().paragraphs[1];
+        editor.view.dispatch(
+          editor.state.tr.insertText("嵌套", nestedParagraph.from),
+        );
+      }
+    });
+    bridge.onRevisionChange((revision) => {
+      secondListenerRevisions.push(revision);
+    });
+
+    const outerParagraph = bridge.getSnapshot().paragraphs[0];
+    editor.view.dispatch(
+      editor.state.tr.insertText("外层", outerParagraph.from),
+    );
+
+    expect(bridge.getRevision()).toBe(2);
+    expect(firstListenerRevisions).toEqual([1, 2]);
+    expect(secondListenerRevisions).toEqual([2]);
+
+    bridge.destroy();
+  });
+
   it("highlights a range with decorations without changing revision or history", () => {
     const editor = createEditor();
     const bridge = new EditorBridge(editor);

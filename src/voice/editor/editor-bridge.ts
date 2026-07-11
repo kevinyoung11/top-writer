@@ -252,8 +252,13 @@ export class EditorBridge {
     this.lastObservedRevision = revision;
     for (const listener of [...this.revisionListeners]) {
       if (this.destroyed) return;
+      if (this.lastObservedRevision !== revision) return;
       if (!this.revisionListeners.has(listener)) continue;
-      listener(revision);
+      try {
+        listener(revision);
+      } catch {
+        // Listener failures must not interrupt the editor transaction.
+      }
     }
   };
 
